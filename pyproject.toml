@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stochastic-vol-surface"
+version = "0.1.0"
+description = "Deep Stochastic Volatility Surface Modeler"
+requires-python = ">=3.10"
+dependencies = [
+    "yfinance>=0.2",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "torch>=2.0",
+    "torchsde>=0.2",
+    "scikit-learn>=1.3",
+    "plotly>=5.0",
+    "streamlit>=1.28",
+    "apscheduler>=3.10",
+    "fredapi>=0.5",
+    "pandera>=0.17",
+    "pydantic>=2.0",
+    "pyarrow>=13.0",
+    "fastparquet>=2023.10.1",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
