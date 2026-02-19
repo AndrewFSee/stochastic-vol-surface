@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "stochastic-vol-surface"
+version = "0.1.0"
+description = "Deep Stochastic Volatility Surface Modeler with Neural SDEs"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Andrew See" }]
+keywords = ["volatility", "options", "neural-sde", "quant-finance", "stochastic-volatility"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+]
+
+dependencies = [
+    # Data acquisition
+    "yfinance>=0.2.40",
+    "fredapi>=0.5.2",
+    "pandas>=2.1.0",
+    "pyarrow>=14.0.0",
+    "pandera>=0.18.0",
+    # Surface construction & calibration
+    "scipy>=1.11.0",
+    "numpy>=1.26.0",
+    "py-vollib>=1.0.1",
+    # Neural SDE
+    "torch>=2.1.0",
+    "torchsde>=0.2.6",
+    # Visualization
+    "plotly>=5.18.0",
+    "streamlit>=1.30.0",
+    "matplotlib>=3.8.0",
+    # Scheduling
+    "apscheduler>=3.10.4",
+    # LLM agents
+    "openai>=1.10.0",
+    # Config & utilities
+    "pyyaml>=6.0.1",
+    "pydantic>=2.5.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.11.0",
+    "ruff>=0.1.8",
+    "mypy>=1.7.0",
+    "types-PyYAML>=6.0.12",
+    "ipykernel>=6.27.0",
+    "nbformat>=5.9.0",
+]
+
+[project.scripts]
+vol-scrape = "scripts.run_scraper:main"
+vol-backtest = "scripts.run_backtest:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+target-version = "py310"
+
+[tool.ruff.isort]
+known-first-party = ["src"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

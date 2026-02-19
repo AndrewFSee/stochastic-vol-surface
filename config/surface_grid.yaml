@@ -1,0 +1,43 @@
+# =============================================================================
+# Strike moneyness / tenor grid definitions for vol surface construction
+# =============================================================================
+
+# Log-moneyness grid: k = log(K/F) where F is the forward price
+# Range covers approximately 20% OTM on each side
+moneyness:
+  min: -0.20      # Deep ITM puts / OTM calls
+  max: 0.20       # Deep OTM puts / ITM calls
+  step: 0.01      # 1% increments → 41 points
+  # Resulting grid: [-0.20, -0.19, ..., 0.00, ..., 0.19, 0.20]
+
+# Tenor grid in calendar days
+tenors_days: [7, 14, 21, 30, 45, 60, 90, 120, 180, 270, 365, 545, 730]
+
+# Equivalent tenor grid in annualized years (days / 365)
+# Used internally by models
+tenors_years:
+  - 0.01918   # 7 days
+  - 0.03836   # 14 days
+  - 0.05753   # 21 days
+  - 0.08219   # 30 days
+  - 0.12329   # 45 days
+  - 0.16438   # 60 days
+  - 0.24658   # 90 days
+  - 0.32877   # 120 days
+  - 0.49315   # 180 days
+  - 0.73973   # 270 days
+  - 1.00000   # 365 days
+  - 1.49315   # 545 days
+  - 2.00000   # 730 days
+
+# Interpolation settings for filling the standardized grid
+interpolation:
+  per_slice_method: "svi"           # SVI fit per tenor slice
+  across_tenors_method: "cubic"     # Cubic spline interpolation across tenors
+  fallback_method: "rbf"            # RBF for scattered data / missing slices
+  extrapolation: "flat"             # Flat extrapolation outside observed range
+
+# Density of interpolation for visualization (overrides grid for 3D plots)
+viz_grid:
+  moneyness_points: 81              # -0.20 to 0.20 in 0.005 steps
+  tenor_points: 50                  # Smooth tenor axis for 3D surface plot

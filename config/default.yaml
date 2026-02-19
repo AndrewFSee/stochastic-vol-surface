@@ -1,0 +1,157 @@
+# =============================================================================
+# Default configuration for the Stochastic Vol Surface Modeler
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Data acquisition
+# ---------------------------------------------------------------------------
+data:
+  tickers:
+    equity: ["SPY", "QQQ", "AAPL", "MSFT"]
+    vix_family: ["^VIX", "^VIX3M", "^VIX9D", "^SKEW", "^VVIX"]
+
+  rates:
+    fred_series:
+      - DGS1MO   # 1-month Treasury
+      - DGS3MO   # 3-month Treasury
+      - DGS6MO   # 6-month Treasury
+      - DGS1     # 1-year Treasury
+      - DGS2     # 2-year Treasury
+      - DGS5     # 5-year Treasury
+      - DGS10    # 10-year Treasury
+
+  storage:
+    base_dir: "data"
+    raw_dir: "data/raw/options_chains"
+    kaggle_dir: "data/kaggle"
+    surfaces_dir: "data/surfaces"
+    calibrations_dir: "data/calibrations"
+    models_dir: "data/models"
+    vix_dir: "data/vix"
+    compression: "snappy"
+
+# ---------------------------------------------------------------------------
+# Scraper schedule
+# ---------------------------------------------------------------------------
+scheduler:
+  # Run daily at 4:30 PM Eastern Time (after US market close)
+  cron:
+    hour: 16
+    minute: 30
+    timezone: "America/New_York"
+  retry_attempts: 3
+  retry_delay_seconds: 60
+
+# ---------------------------------------------------------------------------
+# Surface construction
+# ---------------------------------------------------------------------------
+surface:
+  min_open_interest: 10
+  min_volume: 5
+  min_time_to_expiry_days: 7
+  max_time_to_expiry_days: 730
+  moneyness_range: [-0.20, 0.20]
+  iv_bounds: [0.01, 5.0]   # 1% to 500% annualized vol
+
+# ---------------------------------------------------------------------------
+# Parametric model parameters (defaults / initial guesses)
+# ---------------------------------------------------------------------------
+models:
+  sabr:
+    beta: 0.5            # Fixed backbone exponent (0=normal, 1=lognormal)
+    alpha_0: 0.30        # Initial alpha (ATM vol level)
+    rho_0: -0.30         # Initial rho (vol-spot correlation)
+    nu_0: 0.40           # Initial nu (vol-of-vol)
+    bounds:
+      alpha: [0.001, 5.0]
+      rho: [-0.999, 0.999]
+      nu: [0.001, 5.0]
+
+  heston:
+    v0_0: 0.04           # Initial variance (0.2^2)
+    kappa_0: 2.0         # Mean reversion speed
+    theta_0: 0.04        # Long-run variance
+    sigma_0: 0.30        # Vol-of-vol
+    rho_0: -0.70         # Correlation
+    bounds:
+      v0: [0.0001, 2.0]
+      kappa: [0.001, 20.0]
+      theta: [0.0001, 2.0]
+      sigma: [0.001, 5.0]
+      rho: [-0.999, 0.999]
+
+  rough_bergomi:
+    H_0: 0.10            # Hurst exponent (rough: H < 0.5)
+    eta_0: 1.5           # Vol-of-vol
+    rho_0: -0.90         # Correlation
+    n_mc_paths: 5000     # Monte Carlo paths for pricing
+    n_time_steps: 252    # Time steps per year
+    bounds:
+      H: [0.01, 0.49]
+      eta: [0.01, 5.0]
+      rho: [-0.999, -0.001]
+
+  svi:
+    # Raw SVI parameterization: w(k) = a + b*(rho*(k-m) + sqrt((k-m)^2 + sigma^2))
+    a_0: 0.04
+    b_0: 0.10
+    rho_0: -0.30
+    m_0: 0.0
+    sigma_0: 0.20
+
+  calibration:
+    method: "L-BFGS-B"         # Primary optimizer
+    fallback: "differential_evolution"
+    max_iter: 1000
+    tol: 1.0e-8
+    atm_weight: 3.0             # Extra weight on ATM strikes
+
+# ---------------------------------------------------------------------------
+# Neural SDE
+# ---------------------------------------------------------------------------
+neural:
+  latent_dim: 32
+  encoder:
+    channels: [1, 16, 32, 64]
+    kernel_size: 3
+  decoder:
+    hidden_dims: [128, 256, 128]
+  sde:
+    drift_dims: [64, 64]
+    diffusion_dims: [64, 64]
+    noise_type: "diagonal"
+    sde_type: "ito"
+  training:
+    learning_rate: 1.0e-3
+    batch_size: 32
+    epochs: 200
+    validation_split: 0.15
+    walk_forward_window_days: 252
+    patience: 20
+
+# ---------------------------------------------------------------------------
+# Signal generation
+# ---------------------------------------------------------------------------
+signals:
+  skew:
+    zscore_threshold: 1.5       # Alert when |Z| > threshold
+    lookback_days: 63           # ~3 months rolling window
+  term_structure:
+    inversion_threshold: -0.02  # Flag if slope < this value
+    lookback_days: 63
+  regime:
+    vix_low: 15.0
+    vix_high: 25.0
+    vix_crisis: 40.0
+
+# ---------------------------------------------------------------------------
+# Backtesting
+# ---------------------------------------------------------------------------
+backtest:
+  transaction_cost_bps: 5       # Bid-ask spread estimate
+  margin_rate: 0.02             # Annual margin/financing rate
+  rebalance_frequency: "daily"
+  strategies:
+    - "delta_hedged_straddle"
+    - "risk_reversal"
+    - "calendar_spread"

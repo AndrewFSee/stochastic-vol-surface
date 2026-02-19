@@ -1,0 +1,60 @@
+# Data directories (local storage, git-ignored)
+data/
+*.parquet
+*.h5
+
+# Environment files
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+.installed.cfg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Type checking cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter notebooks (output HTML)
+notebooks/*.html
+.ipynb_checkpoints/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Ruff / Black
+.ruff_cache/
