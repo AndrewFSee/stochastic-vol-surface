@@ -42,7 +42,7 @@ cp .env.example .env
 python scripts/scrape.py --tickers SPY QQQ AAPL MSFT
 
 # 4. Backfill historical data from Kaggle
-python scripts/backfill.py --dataset your-kaggle-dataset/spy-options-iv
+python scripts/backfill.py path/to/spy_options_iv.csv
 
 # 5. Calibrate parametric models
 python scripts/calibrate.py --start 2023-01-01 --end 2023-12-31
