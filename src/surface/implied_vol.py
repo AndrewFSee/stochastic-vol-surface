@@ -38,9 +38,9 @@ def bs_price(
     if T <= 0 or sigma <= 0:
         # Intrinsic value
         if option_type == "call":
-            return max(S * math.exp(-r * 0) - K * math.exp(-r * 0), 0.0)
+            return max(S - K, 0.0)
         else:
-            return max(K * math.exp(-r * 0) - S * math.exp(-r * 0), 0.0)
+            return max(K - S, 0.0)
 
     sqrtT = math.sqrt(T)
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrtT)

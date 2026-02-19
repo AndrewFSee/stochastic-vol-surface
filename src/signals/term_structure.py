@@ -48,9 +48,15 @@ class TermStructureSnapshot:
 
         if abs(slope) < slope_threshold:
             return TermStructureSignal.FLAT
-        # Humped: negative slope AND meaningfully positive curvature (local max in middle)
-        if slope < 0 and curv > curv_threshold:
-            return TermStructureSignal.HUMPED
+        # Humped: interior point is the maximum (above both endpoints by threshold)
+        if len(self.tenors) >= 3:
+            peak_idx = int(np.argmax(self.atm_ivs))
+            if 0 < peak_idx < len(self.atm_ivs) - 1:
+                peak = self.atm_ivs[peak_idx]
+                left = self.atm_ivs[0]
+                right = self.atm_ivs[-1]
+                if peak > left + curv_threshold and peak > right + curv_threshold:
+                    return TermStructureSignal.HUMPED
         if slope < -slope_threshold:
             return TermStructureSignal.INVERTED
         return TermStructureSignal.NORMAL
