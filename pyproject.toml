@@ -26,6 +26,8 @@ dependencies = [
     "PyYAML>=6.0",
     "python-dotenv>=1.0",
     "click>=8.1",
+    "pandas_market_calendars>=4.0",
+    "kaggle>=1.6",
 ]
 
 [project.optional-dependencies]
@@ -40,3 +42,8 @@ include = ["src*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The shared Windows temp dir (%LOCALAPPDATA%\Temp\pytest-of-<user>) is not
+# readable on this machine, which breaks every tmp_path-based test.  Keep
+# pytest's scratch space inside the project instead.  pytest wipes this
+# directory at the start of each run, so nothing else may live here.
+addopts = "--basetemp=.pytest_tmp"

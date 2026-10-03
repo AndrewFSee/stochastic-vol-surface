@@ -46,6 +46,8 @@ def win_rate(pnl_series: np.ndarray) -> float:
 
 def calmar_ratio(returns: np.ndarray, portfolio_values: np.ndarray) -> float:
     """Calmar ratio: annualised return / max drawdown."""
+    if len(returns) == 0:
+        return 0.0
     ann_ret = float(np.mean(returns) * 252)
     mdd = max_drawdown(portfolio_values)
     if mdd < 1e-12:
@@ -64,14 +66,38 @@ def pnl_attribution(
     return pnl_df.groupby(strategy_col)[pnl_col].sum()
 
 
+def log_returns(portfolio_values: np.ndarray) -> np.ndarray:
+    """Daily log returns of a portfolio-value path.
+
+    Log returns are used for the risk ratios because they aggregate the way
+    the portfolio actually compounds.  With simple returns the arithmetic mean
+    exceeds the geometric mean whenever the path is volatile, so a strategy
+    that ends *below* where it started can still post a positive Sharpe — which
+    a delta-hedged straddle with a 45% drawdown did.
+    """
+    pv = np.asarray(portfolio_values, dtype=float)
+    pv = np.maximum(pv, 1e-9)
+    return np.diff(np.log(pv))
+
+
 def compute_all_metrics(backtest_df: pd.DataFrame) -> dict[str, float]:
     """Compute all key metrics from a backtest result DataFrame."""
     pnl = backtest_df["net_pnl"].to_numpy()
     pv = backtest_df["portfolio_value"].to_numpy()
-    returns = np.diff(pv) / np.maximum(pv[:-1], 1.0)
+
+    returns = log_returns(pv)
+    n = len(pv)
+    start = float(pv[0] - pnl[0]) if n else 0.0   # capital before day one's P&L
+    end = float(pv[-1]) if n else 0.0
+    total_return = (end / start - 1.0) if start > 0 else 0.0
+
+    years = max(n / 252.0, 1e-9)
+    cagr = ((end / start) ** (1 / years) - 1.0) if start > 0 and end > 0 else 0.0
 
     return {
         "total_pnl": float(pnl.sum()),
+        "total_return": float(total_return),
+        "cagr": float(cagr),
         "sharpe": sharpe_ratio(returns),
         "sortino": sortino_ratio(returns),
         "max_drawdown": max_drawdown(pv),

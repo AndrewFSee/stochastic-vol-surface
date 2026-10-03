@@ -20,7 +20,9 @@ ENV/
 .env
 
 # Data directories
-data/
+# Leading slash matters: a bare `data/` also matches `src/data/`, which
+# silently excluded the whole ingestion package from version control.
+/data/
 *.parquet
 *.csv.gz
 
@@ -39,6 +41,7 @@ data/
 
 # Testing
 .pytest_cache/
+.pytest_tmp/
 .coverage
 htmlcov/
 

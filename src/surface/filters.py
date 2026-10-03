@@ -3,11 +3,17 @@
 Implements:
 - Butterfly (convexity) filter based on Gatheral's density g(k) >= 0
 - Calendar (monotonicity) filter: total variance must be non-decreasing in tenor
+- DataFrame-level wrappers for the pipeline
 """
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def _gatheral_density(
@@ -22,7 +28,11 @@ def _gatheral_density(
 
     Here w' and w'' are the first and second derivatives of total variance
     with respect to log-moneyness k.
+
+    Callers should ensure *k* is sorted and has no duplicate values.
     """
+    if len(k) < 3:
+        return np.zeros(len(k))
     # Numerical derivatives
     dw = np.gradient(w, k)
     d2w = np.gradient(dw, k)
@@ -123,3 +133,125 @@ def remove_calendar_violations(
             cleaned[T][j] = mono[i]
 
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# DataFrame-level wrappers for the surface construction pipeline
+# ---------------------------------------------------------------------------
+
+def remove_butterfly_violations(
+    df: pd.DataFrame,
+    T_col: str = "T",
+    k_col: str = "log_moneyness",
+    iv_col: str = "implied_volatility",
+    forward_col: str = "forward",
+    strike_col: str = "strike",
+    tol: float = -1e-6,
+) -> pd.DataFrame:
+    """Remove strikes that violate butterfly arbitrage within each tenor slice.
+
+    For each unique tenor in *df*, the Gatheral density g(k) is computed.
+    Strikes where g(k) < *tol* are removed.
+
+    Returns
+    -------
+    pd.DataFrame  – filtered copy of *df* (same columns, fewer rows).
+    """
+    keep_mask = np.ones(len(df), dtype=bool)
+
+    for T_val, grp in df.groupby(T_col):
+        if len(grp) < 3:
+            continue  # too few points to check
+
+        idx = grp.index
+        k = grp[k_col].to_numpy()
+        iv = grp[iv_col].to_numpy()
+        T = float(T_val)
+
+        sort_order = np.argsort(k)
+        k_sorted = k[sort_order]
+        iv_sorted = iv[sort_order]
+
+        # De-duplicate strikes (keep first occurrence)
+        unique_mask = np.concatenate(([True], np.diff(k_sorted) > 1e-12))
+        k_uniq = k_sorted[unique_mask]
+        iv_uniq = iv_sorted[unique_mask]
+
+        if len(k_uniq) < 3:
+            continue
+
+        w_uniq = iv_uniq ** 2 * T
+        g_uniq = _gatheral_density(k_uniq, w_uniq)
+
+        # Map density back to the full (possibly duplicate) sorted array:
+        # duplicates inherit the density of the unique point they collapsed to
+        cum_unique = np.cumsum(unique_mask) - 1  # index into g_uniq
+        g_sorted = g_uniq[cum_unique]
+
+        bad_sorted = g_sorted < tol
+        bad = np.empty_like(bad_sorted)
+        bad[sort_order] = bad_sorted
+
+        if bad.any():
+            keep_mask[idx[bad]] = False
+            logger.debug(
+                "Butterfly filter removed %d/%d strikes at T=%.4f",
+                bad.sum(), len(grp), T,
+            )
+
+    n_removed = (~keep_mask).sum()
+    if n_removed:
+        logger.info("Butterfly arbitrage filter removed %d rows total.", n_removed)
+    return df.loc[keep_mask].reset_index(drop=True)
+
+
+def apply_calendar_filter_grid(
+    k_grid: np.ndarray,
+    tenor_grid: np.ndarray,
+    iv_grid: np.ndarray,
+) -> np.ndarray:
+    """Enforce calendar monotonicity on an already-interpolated grid.
+
+    Operates on total variance w = σ²·T and enforces w non-decreasing in T
+    for each moneyness column via isotonic (PAVA) projection.
+
+    Parameters
+    ----------
+    k_grid : (n_k,)
+    tenor_grid : (n_t,)
+    iv_grid : (n_k, n_t) – implied volatilities
+
+    Returns
+    -------
+    iv_clean : (n_k, n_t)
+    """
+    n_k, n_t = iv_grid.shape
+    tv = iv_grid ** 2 * tenor_grid[np.newaxis, :]  # total variance
+
+    tv_dict: dict[float, np.ndarray] = {}
+    for j, T in enumerate(tenor_grid):
+        tv_dict[T] = tv[:, j]
+
+    tv_clean = remove_calendar_violations(tv_dict)
+
+    iv_clean = np.empty_like(iv_grid)
+    for j, T in enumerate(tenor_grid):
+        w = np.maximum(tv_clean[T], 1e-12)
+        iv_clean[:, j] = np.sqrt(w / max(T, 1e-6))
+    return iv_clean
+
+
+def apply_arbitrage_filters(
+    df: pd.DataFrame,
+    *,
+    remove_butterfly: bool = True,
+    tol: float = -1e-6,
+) -> pd.DataFrame:
+    """Single entry-point: remove butterfly violations from a scatter DataFrame.
+
+    Calendar arbitrage is handled *after* grid interpolation via
+    :func:`apply_calendar_filter_grid`.
+    """
+    if remove_butterfly:
+        df = remove_butterfly_violations(df, tol=tol)
+    return df

@@ -20,6 +20,24 @@ def _d1d2(S: float, K: float, T: float, r: float, sigma: float) -> tuple[float, 
     return d1, d2
 
 
+def bs_price(
+    S: float, K: float, T: float, r: float, sigma: float,
+    option_type: OptionType = "call",
+) -> float:
+    """Black-Scholes price of a European option.
+
+    At or past expiry (``T <= 0``), or for a zero-vol input, returns the
+    discounted intrinsic value so a backtest can settle positions cleanly.
+    """
+    if T <= 0 or sigma <= 0:
+        return float(max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0))
+    d1, d2 = _d1d2(S, K, T, r, sigma)
+    disc = math.exp(-r * T)
+    if option_type == "call":
+        return float(S * _N(d1) - K * disc * _N(d2))
+    return float(K * disc * _N(-d2) - S * _N(-d1))
+
+
 def bs_delta(
     S: float, K: float, T: float, r: float, sigma: float,
     option_type: OptionType = "call",
