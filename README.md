@@ -427,6 +427,7 @@ fits at exact tenors and deltas.
 |---|---|
 | `FRED_API_KEY` | FRED API key (free registration) |
 | `ANTHROPIC_API_KEY` | Claude API key for the dashboard's Interpretation tab |
+| `ANTHROPIC_WORKSPACE_ID` | Only if the key isn't scoped to a workspace: the workspace ID (`wrkspc_...`) to send |
 | `OPENAI_API_KEY` | Optional; only the experimental agent stubs use it |
 | `KAGGLE_USERNAME` | Kaggle username for backfill loader |
 | `KAGGLE_KEY` | Kaggle API key |

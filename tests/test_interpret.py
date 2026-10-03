@@ -123,3 +123,34 @@ def test_missing_credentials(monkeypatch, tmp_path):
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
     with pytest.raises(N.MissingCredentials, match="ANTHROPIC_API_KEY"):
         N._client()
+
+
+def test_workspace_id_is_sent_as_a_header(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    client = N._client()
+    assert client.default_headers.get("anthropic-workspace-id") == "wrkspc_123"
+
+
+def test_no_workspace_header_without_the_variable(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    assert "anthropic-workspace-id" not in N._client().default_headers
+
+
+@pytest.mark.parametrize("api_message, hint", [
+    ("This API key is not scoped to a workspace, so this request must include the "
+     "anthropic-workspace-id header", "ANTHROPIC_WORKSPACE_ID"),
+    ("Your credit balance is too low to access the Anthropic API.", "credit"),
+])
+def test_account_setup_errors_become_instructions(snapshot, tmp_path, api_message, hint):
+    snap, _ = snapshot
+
+    class Failing(FakeClient):
+        def _create(self, **kw):
+            raise RuntimeError(api_message)
+
+    with pytest.raises(N.MissingCredentials, match=hint):
+        N.interpret(snap, client=Failing(), cache_dir=str(tmp_path))

@@ -154,3 +154,23 @@ def test_app_explains_an_empty_store(tmp_path, monkeypatch):
     at.run()
     assert not at.exception
     assert any("build_features" in i.value for i in at.info)
+
+
+# ── Forecast alignment ───────────────────────────────────────────────────
+
+
+def test_window_end_counts_trading_days_across_holidays():
+    # Fri 2026-11-20 + 5 sessions skips Thanksgiving (Thu 11-26): Mon..Wed, Fri, Mon.
+    assert D.window_end([pd.Timestamp("2026-11-20")], 5).iloc[0] == pd.Timestamp("2026-11-30")
+    assert D.window_end([pd.Timestamp("2026-10-02")], 21).iloc[0] == pd.Timestamp("2026-11-02")
+
+
+def test_forecast_outcomes_only_completed_windows():
+    hist = pd.DataFrame({
+        "date": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-10-01"]),
+        "forecast_vol": [0.15, 0.16, 0.14], "lo80_vol": 0.1, "hi80_vol": 0.2,
+        "implied_vol": 0.17, "realised_vol": [0.12, 0.13, np.nan],
+    })
+    out = D.forecast_outcomes(hist, 21)
+    assert len(out) == 2
+    assert (out["window_end"] > out["date"]).all()

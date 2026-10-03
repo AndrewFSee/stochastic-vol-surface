@@ -284,3 +284,30 @@ def track_record(hist: pd.DataFrame) -> dict[str, float]:
         "bias_implied": float(100 * err_i.mean()),
         "coverage80": float(inside.mean()),
     }
+
+
+def window_end(dates, h: int) -> pd.Series:
+    """The session on which each *h*-trading-day forecast window closes.
+
+    A forecast made at the close of *t* covers the returns of sessions
+    t+1 … t+h, so its outcome is known at the close of session t+h (NYSE
+    calendar, holidays included; works for future dates).
+    """
+    from src.features.table import trading_calendar
+
+    d = pd.to_datetime(pd.Series(dates)).reset_index(drop=True)
+    cal = trading_calendar(d.min(), d.max() + pd.Timedelta(days=int(1.6 * h) + 10))
+    pos = np.minimum(cal.searchsorted(d) + h, len(cal) - 1)
+    return pd.Series(cal[pos], index=d.index)
+
+
+def forecast_outcomes(hist: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """Forecasts whose window has closed, keyed by the date it closed.
+
+    Lines a forecast up with the realised vol over the window it predicted,
+    so a perfect forecast would sit on the realised line.
+    """
+    done = hist.dropna(subset=["realised_vol"]).reset_index(drop=True)
+    if done.empty:
+        return done.assign(window_end=pd.Series(dtype="datetime64[ns]"))
+    return done.assign(window_end=window_end(done["date"], horizon).to_numpy())
