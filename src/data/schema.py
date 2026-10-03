@@ -2,7 +2,7 @@
 
 Uses **Pandera** for DataFrame validation and **Pydantic** for config/metadata.
 Every DataFrame that enters or leaves the storage layer must pass through these
-schemas so that downstream modules (grid_builder, calibration, neural) never
+schemas so that downstream modules (surface construction, features) never
 encounter surprise columns or dtypes.
 """
 
@@ -92,7 +92,7 @@ class NormalisedChainSchema(pa.DataFrameModel):
 
 
 class SurfaceGridSchema(pa.DataFrameModel):
-    """Schema for the interpolated regular-grid surface (from grid_builder)."""
+    """Schema for a long-format surface grid (log-moneyness, tenor, IV)."""
 
     log_moneyness: Series[float] = pa.Field(nullable=False)
     T: Series[float] = pa.Field(gt=0, nullable=False)

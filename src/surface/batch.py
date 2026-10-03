@@ -265,7 +265,6 @@ def build_one(
     *,
     options_dir: str = DEFAULT_OPTIONS_DIR,
     surfaces_dir: str = DEFAULT_SURFACES_DIR,
-    method: str = "svi",
     overwrite: bool = False,
     rates_history: Optional[pd.DataFrame] = None,
     fallback_rate: float = 0.05,
@@ -276,8 +275,6 @@ def build_one(
     ----------
     ticker, as_of
         Which snapshot to build.
-    method
-        ``"svi"`` (default) or ``"rbf"``, passed to the interpolator.
     overwrite
         Rebuild even if the output already exists.
     rates_history
@@ -292,9 +289,7 @@ def build_one(
     out_path = surface_path(ticker, as_of, surfaces_dir)
     # A surface from a different construction method is stale, not done:
     # skipping it would leave a corpus that silently mixes builders.
-    if out_path.exists() and not overwrite and (
-        method != "svi" or stored_builder(out_path) == BUILDER_VERSION
-    ):
+    if out_path.exists() and not overwrite and stored_builder(out_path) == BUILDER_VERSION:
         return SurfaceBuildResult(
             ticker=ticker, as_of=as_of, status="skipped", path=out_path,
             message="already exists",
@@ -344,7 +339,6 @@ def build_one(
     try:
         vs = VolSurface.from_chain(
             chain, ticker=ticker, as_of=as_of, spot=spot, r=r, rate_fn=rate_fn,
-            method=method,
         )
     except Exception as exc:
         _discard_superseded(out_path)
@@ -354,7 +348,7 @@ def build_one(
         )
 
     ok, msg, stats = score_grid(vs.iv_grid)
-    if ok and method == "svi" and len(vs.slices) < MIN_SLICES:
+    if ok and len(vs.slices) < MIN_SLICES:
         ok, msg = False, f"only {len(vs.slices)} expiries fitted (need {MIN_SLICES})"
 
     result = SurfaceBuildResult(
@@ -399,17 +393,24 @@ def build_one(
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _quiet_worker() -> None:
+    """Pool initializer: per-expiry fit chatter would flood a parallel sweep."""
+    logging.basicConfig(level=logging.WARNING)
+    for name in ("src.surface.slices", "src.data.storage", "src.data.rates"):
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+
 def build_corpus(
     tickers: Optional[Sequence[str]] = None,
     dates: Optional[Iterable[date]] = None,
     *,
     options_dir: str = DEFAULT_OPTIONS_DIR,
     surfaces_dir: str = DEFAULT_SURFACES_DIR,
-    method: str = "svi",
     overwrite: bool = False,
     start: Optional[str] = None,
     end: Optional[str] = None,
     progress: bool = True,
+    workers: int = 1,
 ) -> CorpusBuildReport:
     """Build surfaces for every (ticker, date) in the raw store.
 
@@ -424,7 +425,11 @@ def build_corpus(
     overwrite
         Rebuild surfaces that already exist.
     progress
-        Log a line per ticker as it completes.
+        Log progress during the sweep and a summary line per ticker.
+    workers
+        Processes to build in parallel.  Surfaces are independent, so this
+        scales with cores: the ~3,500-date historical corpus takes hours on
+        one process.  Results come back in the same order either way.
     """
     from src.data.rates import load_rates_history
 
@@ -445,29 +450,52 @@ def build_corpus(
             "Run `python scripts/backfill_rates.py` for accurate forwards."
         )
 
-    report = CorpusBuildReport()
-
+    tasks: list[tuple[str, date]] = []
     for tkr in tickers:
         tkr_dates = list(dates) if dates is not None else available_dates(tkr, options_dir)
         if start:
             tkr_dates = [d for d in tkr_dates if d.isoformat() >= start]
         if end:
             tkr_dates = [d for d in tkr_dates if d.isoformat() <= end]
+        tasks.extend((tkr, d) for d in tkr_dates)
 
-        for d in tkr_dates:
-            res = build_one(
-                tkr, d,
-                options_dir=options_dir, surfaces_dir=surfaces_dir,
-                method=method, overwrite=overwrite, rates_history=rates_history,
-            )
-            report.results.append(res)
+    kwargs = dict(options_dir=options_dir, surfaces_dir=surfaces_dir,
+                  overwrite=overwrite, rates_history=rates_history)
+    step = max(len(tasks) // 20, 1)
 
-        if progress:
+    def _log_progress(n_done: int) -> None:
+        if progress and (n_done % step == 0 or n_done == len(tasks)):
+            logger.info("progress: %d / %d surfaces", n_done, len(tasks))
+
+    results: list[Optional[SurfaceBuildResult]] = [None] * len(tasks)
+    if workers > 1 and len(tasks) > 1:
+        import os
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        # One BLAS thread per worker: N processes each spawning a full thread
+        # pool oversubscribes the CPU.  Set before the pool starts so the
+        # workers inherit it before numpy loads.
+        for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+            os.environ.setdefault(var, "1")
+        with ProcessPoolExecutor(max_workers=workers, initializer=_quiet_worker) as ex:
+            futures = {ex.submit(build_one, t, d, **kwargs): i
+                       for i, (t, d) in enumerate(tasks)}
+            for n, fut in enumerate(as_completed(futures), 1):
+                results[futures[fut]] = fut.result()
+                _log_progress(n)
+    else:
+        for i, (t, d) in enumerate(tasks):
+            results[i] = build_one(t, d, **kwargs)
+            _log_progress(i + 1)
+
+    report = CorpusBuildReport(results=list(results))
+    if progress:
+        for tkr in tickers:
             done = [r for r in report.results if r.ticker == tkr]
             built = sum(1 for r in done if r.status == "built")
             skipped = sum(1 for r in done if r.status == "skipped")
             bad = sum(1 for r in done if r.status in ("failed", "rejected"))
-            logger.info("%-6s %3d dates: %3d built, %3d skipped, %3d failed/rejected",
+            logger.info("%-6s %4d dates: %4d built, %4d skipped, %3d failed/rejected",
                         tkr, len(done), built, skipped, bad)
 
     return report

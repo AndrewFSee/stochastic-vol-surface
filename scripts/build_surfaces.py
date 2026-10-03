@@ -16,6 +16,7 @@ Usage:
 """
 
 import logging
+import os
 import sys
 
 import click
@@ -27,7 +28,7 @@ logging.basicConfig(
 )
 # Per-surface stage logging is far too chatty for a corpus sweep; the batch
 # layer reports one line per ticker plus a QC report at the end.
-for _noisy in ("src.surface.grid_builder", "src.surface.surface",
+for _noisy in ("src.surface.slices", "src.surface.surface",
                "src.surface.filters", "src.data.storage", "src.data.rates"):
     logging.getLogger(_noisy).setLevel(logging.ERROR)
 
@@ -39,12 +40,12 @@ for _noisy in ("src.surface.grid_builder", "src.surface.surface",
 @click.option("--surfaces-dir", default="data/surfaces", show_default=True)
 @click.option("--start", default=None, help="Start date YYYY-MM-DD")
 @click.option("--end", default=None, help="End date YYYY-MM-DD")
-@click.option("--method", default="svi", type=click.Choice(["svi", "rbf"]),
-              show_default=True)
 @click.option("--overwrite", is_flag=True, help="Rebuild existing surfaces")
+@click.option("--workers", "-j", default=max(1, (os.cpu_count() or 2) - 1), show_default=True,
+              help="Parallel build processes")
 @click.option("--report", default=None,
               help="Write the per-surface QC report to this CSV path")
-def main(tickers, options_dir, surfaces_dir, start, end, method, overwrite, report):
+def main(tickers, options_dir, surfaces_dir, start, end, overwrite, workers, report):
     """Build volatility surfaces for every stored options chain."""
     from src.surface.batch import build_corpus
 
@@ -52,8 +53,8 @@ def main(tickers, options_dir, surfaces_dir, start, end, method, overwrite, repo
         tickers=list(tickers) or None,
         options_dir=options_dir,
         surfaces_dir=surfaces_dir,
-        method=method,
         overwrite=overwrite,
+        workers=workers,
         start=start,
         end=end,
     )

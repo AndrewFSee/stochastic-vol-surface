@@ -142,3 +142,38 @@ def test_signal_on_empty_dir_is_empty(tmp_path):
     empty = tmp_path / "none"
     empty.mkdir()
     assert V.vix_term_structure_signal(str(empty)).empty
+
+
+def test_snapshots_take_precedence_over_backfill(tmp_path):
+    """The backfill fills history; collected snapshots win where they overlap."""
+    import pandas as pd
+
+    from src.data.vix_family import BACKFILL_FILENAME, load_vix_history
+
+    idx = pd.DatetimeIndex(pd.to_datetime(["2026-01-05", "2026-01-06"]), name="date")
+    pd.DataFrame({"VIX": [10.0, 11.0], "SKEW": [130.0, 131.0]}, index=idx).to_parquet(
+        tmp_path / BACKFILL_FILENAME)
+    pd.DataFrame({"VIX": [99.0], "SKEW": [None]}, index=idx[1:]).to_parquet(
+        tmp_path / "vix_2026-01-06.parquet")
+
+    h = load_vix_history(str(tmp_path))
+    assert h.loc["2026-01-05", "VIX"] == 10.0     # only in the backfill
+    assert h.loc["2026-01-06", "VIX"] == 99.0     # snapshot wins
+    assert h.loc["2026-01-06", "SKEW"] == 131.0   # backfill fills the snapshot's gap
+
+
+def test_backfill_merges_rather_than_replaces(tmp_path, monkeypatch):
+    """A short re-run must not erase a longer backfill already stored."""
+    import pandas as pd
+
+    from src.data import vix_family as V
+
+    def fake_fetch(start, end):
+        idx = pd.bdate_range(start, end, inclusive="left", name="date")
+        return pd.DataFrame({"VIX": 20.0}, index=idx)
+
+    monkeypatch.setattr(V, "fetch_vix_family", fake_fetch)
+    V.backfill_vix_history("2010-01-04", "2010-01-09", str(tmp_path))
+    V.backfill_vix_history("2024-01-02", "2024-01-05", str(tmp_path))
+    h = pd.read_parquet(tmp_path / V.BACKFILL_FILENAME)
+    assert pd.Timestamp("2010-01-04") in h.index and pd.Timestamp("2024-01-02") in h.index

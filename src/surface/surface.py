@@ -170,26 +170,19 @@ class VolSurface:
         r: float = 0.05,
         *,
         rate_fn: Optional[Callable[[float], float]] = None,
-        apply_butterfly_filter: bool = True,
         apply_calendar_filter: bool = True,
-        method: str = "svi",
         k_grid: np.ndarray | None = None,
         t_grid: np.ndarray | None = None,
     ) -> VolSurface:
         """Build a VolSurface from a raw options chain DataFrame.
 
-        ``method="svi"`` (default) — per-expiry construction, see
-        :mod:`src.surface.slices`:
+        Per-expiry construction (see :mod:`src.surface.slices`):
 
         1. two-sided quotes → forward from put-call parity per expiry
         2. OTM Black-76 implied vols from the mids
         3. weighted, constrained SVI fit per expiry
         4. total variance linear in T between bracketing expiries
         5. ``apply_calendar_filter_grid`` – enforce total-variance monotonicity
-
-        ``method="rbf"`` — the legacy scatter pipeline (pooled tenor bins,
-        quoted IVs, thin-plate RBF).  Kept for comparison and quick tests; it
-        is materially noisier and should not feed features or models.
 
         Parameters
         ----------
@@ -202,67 +195,26 @@ class VolSurface:
             every expiry unless *rate_fn* is given.
         rate_fn : callable ``T -> r``, optional
             Term structure of rates, used per expiry for discounting.
-        apply_butterfly_filter : bool
-            Legacy pipeline only — removes butterfly-violating scatter points.
         apply_calendar_filter : bool
             Enforce non-decreasing total variance across tenors on the grid.
-        method : ``"svi"`` | ``"rbf"``
         k_grid, t_grid : optional grid override (defaults from config).
-
-        Returns
-        -------
-        VolSurface
         """
-        from src.surface.filters import apply_arbitrage_filters, apply_calendar_filter_grid
-        from src.surface.grid_builder import (
-            build_surface_grid, default_k_grid, default_t_grid, interpolate_to_grid,
-        )
+        from src.surface.filters import apply_calendar_filter_grid
+        from src.surface.grid import default_k_grid, default_t_grid
+        from src.surface.slices import BUILDER_VERSION, fit_slices, slices_to_grid
 
-        if method == "svi":
-            from src.surface.slices import BUILDER_VERSION, fit_slices, slices_to_grid
-
-            k_nodes = default_k_grid() if k_grid is None else np.asarray(k_grid, float)
-            t_nodes = default_t_grid() if t_grid is None else np.asarray(t_grid, float)
-            fits = fit_slices(chain, spot, rate_fn if rate_fn is not None else r)
-            if len(fits) < 2:
-                raise ValueError(f"only {len(fits)} expiries could be fitted (need 2)")
-            iv_grid, observed = slices_to_grid(fits, k_nodes, t_nodes)
-            if apply_calendar_filter:
-                iv_grid = apply_calendar_filter_grid(k_nodes, t_nodes, iv_grid)
-            return cls(
-                ticker=ticker, as_of=as_of, k_grid=k_nodes, t_grid=t_nodes,
-                iv_grid=iv_grid, spot=spot, r=r, observed=observed,
-                slices=[f.to_dict() for f in fits], builder=BUILDER_VERSION,
-            )
-
-        # ── Legacy scatter pipeline ───────────────────────────────────────
-        # 1. Raw chain → scatter
-        scatter = build_surface_grid(chain, spot=spot, r=r)
-        logger.info("Scatter: %d points after IV inversion + moneyness filter", len(scatter))
-
-        # 2. Butterfly filter
-        if apply_butterfly_filter:
-            scatter = apply_arbitrage_filters(scatter, remove_butterfly=True)
-            logger.info("After butterfly filter: %d points", len(scatter))
-
-        # 3. Interpolate to regular grid
-        k_nodes, t_nodes, iv_grid = interpolate_to_grid(
-            scatter, k_grid=k_grid, tenor_grid=t_grid, method=method,
-        )
-
-        # 4. Calendar arbitrage clean-up
+        k_nodes = default_k_grid() if k_grid is None else np.asarray(k_grid, float)
+        t_nodes = default_t_grid() if t_grid is None else np.asarray(t_grid, float)
+        fits = fit_slices(chain, spot, rate_fn if rate_fn is not None else r)
+        if len(fits) < 2:
+            raise ValueError(f"only {len(fits)} expiries could be fitted (need 2)")
+        iv_grid, observed = slices_to_grid(fits, k_nodes, t_nodes)
         if apply_calendar_filter:
             iv_grid = apply_calendar_filter_grid(k_nodes, t_nodes, iv_grid)
-
         return cls(
-            ticker=ticker,
-            as_of=as_of,
-            k_grid=k_nodes,
-            t_grid=t_nodes,
-            iv_grid=iv_grid,
-            spot=spot,
-            r=r,
-            builder=f"legacy-{method}",
+            ticker=ticker, as_of=as_of, k_grid=k_nodes, t_grid=t_nodes,
+            iv_grid=iv_grid, spot=spot, r=r, observed=observed,
+            slices=[f.to_dict() for f in fits], builder=BUILDER_VERSION,
         )
 
     # ── Persistence ───────────────────────────────────────────────────────

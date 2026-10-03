@@ -35,13 +35,15 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from src.dashboard import data as D
-from src.dashboard.theme import Theme, colorscale, style, theme_for
+from src.dashboard.theme import Theme, colorscale, rgba, style, theme_for
 
 # The store to read; override with VSS_DATA_DIR (e.g. for a test store).
 # Defaults to the project's own data folder, so the app finds it whatever
 # directory it is launched from.
 DATA_DIR = os.environ.get("VSS_DATA_DIR", str(_ROOT / "data"))
 FEATURES_PATH = f"{DATA_DIR}/features/surface_features.parquet"
+FORECASTS_PATH = f"{DATA_DIR}/forecasts/vol_forecasts.parquet"
+INTERPRETATIONS_DIR = f"{DATA_DIR}/interpretations"
 SURFACES_DIR = f"{DATA_DIR}/surfaces"
 OPTIONS_DIR = f"{DATA_DIR}/options"
 
@@ -60,6 +62,13 @@ def _features(path: str) -> pd.DataFrame:
     from src.features import load_feature_table
 
     return load_feature_table(path)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _forecasts(path: str) -> pd.DataFrame:
+    from src.forecast.forecaster import load_forecasts
+
+    return load_forecasts(path)
 
 
 @st.cache_resource(ttl=300, show_spinner=False)
@@ -361,6 +370,139 @@ def view_history(t: Theme, feats: pd.DataFrame, ticker: str, as_of: pd.Timestamp
     _table(tbl.iloc[::-1])
 
 
+def view_forecast(t: Theme, ticker: str, as_of: pd.Timestamp, window_days) -> None:
+    fc = _forecasts(FORECASTS_PATH)
+    if fc.empty:
+        st.info("No forecasts yet. Build them with `python scripts/build_forecasts.py`.")
+        return
+    latest = D.latest_forecasts(fc, ticker, as_of)
+    if latest.empty:
+        st.info(f"No forecasts for {ticker} on or before {as_of.date()}.")
+        return
+
+    labels = {5: "5-day", 21: "21-day"}
+    cols = st.columns(4)
+    for i, h in enumerate((5, 21)):
+        if h not in latest.index:
+            cols[2 * i].metric(f"{labels[h]} forecast", "–")
+            continue
+        r = latest.loc[h]
+        stale = r["date"] < as_of
+        cols[2 * i].metric(
+            f"{labels[h]} forecast vol", D.pct(r["forecast_vol"]),
+            help=f"80% range {D.pct(r['lo80_vol'])} – {D.pct(r['hi80_vol'])}"
+                 + (f" (as of {r['date'].date()})" if stale else ""),
+        )
+        src = {"atm_7d": "7d ATM", "atm_14d": "14d ATM (no 7d expiry)",
+               "vs_30d": "30d var swap", "atm_30d": "30d ATM"}.get(r["implied_input"], r["implied_input"])
+        cols[2 * i + 1].metric(
+            f"Implied ({src})", D.pct(r["implied_vol"]),
+            D.pts(r["implied_vol"] - r["forecast_vol"]).replace(" pts", " pts vs forecast"),
+            delta_color="off",
+            help="Implied minus forecast: the volatility premium the market is pricing "
+                 "over the model's expectation.",
+        )
+    st.caption("80% ranges: " + "  ·  ".join(
+        f"{labels[h]} {D.pct(latest.loc[h, 'lo80_vol'])} – {D.pct(latest.loc[h, 'hi80_vol'])}"
+        for h in (5, 21) if h in latest.index))
+
+    h = 21 if st.segmented_control("Horizon", ["21-day", "5-day"], default="21-day",
+                                   key="fc_horizon") != "5-day" else 5
+    start = None if window_days is None else as_of - pd.Timedelta(days=window_days)
+    hist = D.forecast_history(fc, ticker, h, start, as_of)
+    if hist.empty:
+        st.info("No forecast history in this window.")
+        return
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hist["date"], y=100 * hist["hi80_vol"], mode="lines",
+                             line=dict(width=0), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=hist["date"], y=100 * hist["lo80_vol"], mode="lines",
+                             line=dict(width=0), fill="tonexty",
+                             fillcolor=rgba(t.series[0], 0.12), name="80% range",
+                             hoverinfo="skip"))
+    for i, (col, name) in enumerate([
+        ("forecast_vol", "Forecast"),
+        ("implied_vol", "Implied"),
+        ("realised_vol", f"Realised over the next {h} days"),
+    ]):
+        fig.add_trace(go.Scatter(
+            x=hist["date"], y=100 * hist[col], mode="lines", name=name,
+            line=dict(width=2, color=t.series[i]),
+            hovertemplate="%{y:.1f}%<extra>" + name + "</extra>",
+        ))
+    style(fig, t, height=420, title=f"{ticker} {labels[h]} volatility: forecast, implied and realised",
+          y_title="Annualised vol (%)")
+    # A filled band makes Plotly reverse the legend; keep it in trace order.
+    fig.update_layout(legend_traceorder="normal")
+    _chart(fig)
+
+    tr = D.track_record(hist)
+    if tr.get("n"):
+        k = st.columns(4)
+        k[0].metric("Forecast RMSE", f"{tr['rmse_forecast']:.2f} pts",
+                    help="Against realised vol, over this window's completed horizons.")
+        k[1].metric("Implied RMSE", f"{tr['rmse_implied']:.2f} pts")
+        k[2].metric("Forecast bias", f"{tr['bias_forecast']:+.2f} pts",
+                    help=f"Implied bias: {tr['bias_implied']:+.2f} pts (the risk premium).")
+        k[3].metric("80% range hit rate", f"{100 * tr['coverage80']:.0f}%",
+                    help="Share of realised outcomes inside the 80% range; ~80% is well calibrated.")
+    st.caption(
+        "HAR + implied vol, pooled across tickers, refitted monthly. Every point is "
+        "out-of-sample: it uses only data available on its date. Realised vol is "
+        "plotted at the forecast date and fills in once the horizon has passed. "
+        "Model choice: see docs/forecast_evaluation.md."
+    )
+    tbl = hist[["date", "forecast_vol", "lo80_vol", "hi80_vol", "implied_vol",
+                "realised_vol", "implied_input"]].copy()
+    for c in ["forecast_vol", "lo80_vol", "hi80_vol", "implied_vol", "realised_vol"]:
+        tbl[c] = (100 * tbl[c]).round(2)
+    tbl["date"] = tbl["date"].dt.date
+    _table(tbl.iloc[::-1])
+
+
+def view_interpretation(feats: pd.DataFrame, ticker: str, as_of: pd.Timestamp) -> None:
+    from src.interpret import narrator as N
+    from src.interpret.snapshot import build_snapshot
+
+    try:
+        snap = build_snapshot(feats, _forecasts(FORECASTS_PATH), ticker, as_of)
+    except ValueError as exc:
+        st.info(str(exc))
+        return
+
+    cached, current = N.load_cached(snap, INTERPRETATIONS_DIR)
+    label = "Regenerate" if cached is not None else "Generate interpretation"
+    clicked = st.button(label, type="secondary" if cached is not None and current else "primary",
+                        help=f"Asks {N.MODEL} to interpret this ticker and date. Results are "
+                             "cached, so each ticker and date costs one call.")
+    if clicked:
+        with st.spinner(f"Asking {N.MODEL}…"):
+            try:
+                cached = N.interpret(snap, cache_dir=INTERPRETATIONS_DIR, force=cached is not None)
+                current = True
+            except N.MissingCredentials as exc:
+                st.warning(str(exc))
+            except Exception as exc:  # API errors, refusals: show, don't crash the app
+                st.error(f"Interpretation failed: {exc}")
+
+    if cached is None:
+        st.caption(f"No interpretation for {ticker} on {snap['as_of']} yet.")
+    else:
+        if not current:
+            st.warning("The data for this date has changed since this was written. "
+                       "Regenerate to update it.")
+        st.markdown(cached.text)
+        u = cached.usage or {}
+        st.caption(
+            f"AI-generated by {cached.served_by or cached.model} on {cached.created_at[:16]} UTC "
+            f"from the inputs below; check it against the charts. Tokens: "
+            f"{u.get('input_tokens', '?')} in / {u.get('output_tokens', '?')} out."
+        )
+    with st.expander("Inputs sent to Claude"):
+        st.json(snap, expanded=False)
+
+
 def view_quality(t: Theme, feats: pd.DataFrame, ticker: str, as_of: pd.Timestamp,
                  window_days) -> None:
     from src.surface.diagnostics import benchmark_against
@@ -461,7 +603,8 @@ def run_dashboard() -> None:
     k[4].metric("VIX3M / VIX", "–" if not np.isfinite(ratio) else f"{ratio:.3f}",
                 help="Above 1 = contango (calm); below 1 = backwardation (stress).")
 
-    tabs = st.tabs(["Overview", "Smile", "Term structure", "Surface", "History", "Quality"])
+    tabs = st.tabs(["Overview", "Smile", "Term structure", "Surface", "History", "Forecast",
+                    "Interpretation", "Quality"])
     with tabs[0]:
         view_overview(feats, as_of)
     with tabs[1]:
@@ -473,6 +616,10 @@ def run_dashboard() -> None:
     with tabs[4]:
         view_history(t, feats, ticker, as_of, WINDOWS[window])
     with tabs[5]:
+        view_forecast(t, ticker, as_of, WINDOWS[window])
+    with tabs[6]:
+        view_interpretation(feats, ticker, as_of)
+    with tabs[7]:
         view_quality(t, feats, ticker, as_of, WINDOWS[window])
 
 

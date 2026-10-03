@@ -238,3 +238,49 @@ def pct(x: float) -> str:
 
 def surfaces_available(surfaces_dir: str) -> bool:
     return Path(surfaces_dir).exists() and any(Path(surfaces_dir).glob("ticker=*"))
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Volatility forecasts
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def latest_forecasts(forecasts: pd.DataFrame, ticker: str, as_of) -> pd.DataFrame:
+    """The newest forecast per horizon on or before *as_of* (indexed by horizon)."""
+    f = forecasts[(forecasts["ticker"] == ticker) & (forecasts["date"] <= pd.Timestamp(as_of))]
+    if f.empty:
+        return f
+    return f.sort_values("date").groupby("horizon").tail(1).set_index("horizon")
+
+
+def forecast_history(forecasts: pd.DataFrame, ticker: str, horizon: int,
+                     start=None, end=None) -> pd.DataFrame:
+    """A ticker's stored forecasts for one horizon in ``[start, end]``, oldest first."""
+    f = forecasts[(forecasts["ticker"] == ticker) & (forecasts["horizon"] == horizon)]
+    if start is not None:
+        f = f[f["date"] >= pd.Timestamp(start)]
+    if end is not None:
+        f = f[f["date"] <= pd.Timestamp(end)]
+    return f.sort_values("date").reset_index(drop=True)
+
+
+def track_record(hist: pd.DataFrame) -> dict[str, float]:
+    """Accuracy of the forecast and of implied vol where realised vol is known.
+
+    RMSE and bias are in vol points; coverage is the share of realised vols
+    inside the 80% interval (well calibrated ≈ 80%).
+    """
+    k = hist.dropna(subset=["realised_vol", "forecast_vol", "implied_vol"])
+    if k.empty:
+        return {"n": 0}
+    err_f = k["forecast_vol"] - k["realised_vol"]
+    err_i = k["implied_vol"] - k["realised_vol"]
+    inside = (k["realised_vol"] >= k["lo80_vol"]) & (k["realised_vol"] <= k["hi80_vol"])
+    return {
+        "n": int(len(k)),
+        "rmse_forecast": float(100 * np.sqrt(np.mean(err_f ** 2))),
+        "rmse_implied": float(100 * np.sqrt(np.mean(err_i ** 2))),
+        "bias_forecast": float(100 * err_f.mean()),
+        "bias_implied": float(100 * err_i.mean()),
+        "coverage80": float(inside.mean()),
+    }

@@ -13,7 +13,8 @@ untested.
 | Neural SDE | `neural/` | Trains on the 25×8 surface grids. About 150 days of live data is too little history to learn dynamics. |
 | Signals | `signals/` | Rule-based skew, term-structure and regime calls. For modelling, the feature table's z-scores and percentiles supersede them. |
 | Backtest | `backtest/` | Walk-forward engine pricing at the surface mid with a flat cost. Prices legs off `S·e^(rT)`, not the parity forwards the surfaces now use. |
-| Agents | `agents/` | LLM narrative stubs (optional `openai`). |
+| Agents | `agents/` | LLM narrative stubs (optional `openai`). Superseded by the dashboard's Claude interpretation (`src/interpret/`). |
+| LSTM forecasters | `forecast/lstm.py` | LSTM and LSTM-GARCH volatility forecasts. On SPY 2013–2023 both lost to HAR + implied (significantly at 5 days); see `docs/forecast_evaluation.md`. |
 
 Promoting any of these means validating it against data first, the way
 `scripts/validate_surfaces.py` checks the surfaces against VIX.

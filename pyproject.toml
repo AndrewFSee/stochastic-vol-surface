@@ -24,6 +24,9 @@ dependencies = [
     "click>=8.1",
     "pandas_market_calendars>=4.0",
     "kaggle>=1.6",
+    "arch>=7.0",                # GARCH benchmarks in the forecast evaluation
+    "scikit-learn>=1.3",        # gradient-boosting benchmark
+    "anthropic>=1.0",           # dashboard interpretation (Claude)
 ]
 
 [project.optional-dependencies]

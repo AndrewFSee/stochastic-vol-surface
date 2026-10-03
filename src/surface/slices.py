@@ -1,10 +1,10 @@
 """Per-expiry surface construction: parity forwards, OTM Black IVs, SVI slices.
 
-This is the pipeline :meth:`VolSurface.from_chain` uses by default.  It
-replaces the older pooled-bin approach in :mod:`src.surface.grid_builder`,
-which merged every expiry within ±30% of a target tenor into one SVI fit and
-gave them all the same time-to-expiry.  That mixing was the dominant source of
-day-to-day noise in the stored surfaces.
+This is the pipeline :meth:`VolSurface.from_chain` uses.  It replaced an
+older pooled-bin approach (since removed; see commit cf8bbea) that merged
+every expiry within ±30% of a target tenor into one SVI fit and gave them all
+the same time-to-expiry.  That mixing was the dominant source of day-to-day
+noise in the stored surfaces.
 
 Pipeline, per expiry
 --------------------
@@ -334,6 +334,34 @@ def _active_sets() -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
 
 
 _ACTIVE_SETS = _active_sets()
+# The same sets as plain tuples for the scalar solver below.
+_ACTIVE_SETS_PY = [(tuple(int(i) for i in fr), tuple(int(i) for i in fx),
+                    tuple(float(v) for v in vals)) for fr, fx, vals in _ACTIVE_SETS]
+_LO = (0.0, 0.0, 0.0)
+_HI = (math.inf, MAX_WING_SLOPE, MAX_WING_SLOPE)
+
+
+def _solve_small(M: list, r: list) -> Optional[list]:
+    """Solve an n x n system (n <= 3) in closed form; None if near-singular."""
+    n = len(r)
+    if n == 1:
+        return [r[0] / M[0][0]] if M[0][0] != 0.0 else None
+    if n == 2:
+        (a, b), (c, d) = M
+        det = a * d - b * c
+        if abs(det) <= 1e-13 * (abs(a * d) + abs(b * c)):
+            return None
+        return [(r[0] * d - b * r[1]) / det, (a * r[1] - r[0] * c) / det]
+    (a, b, c), (d, e, f), (g, h, i) = M
+    c0, c1, c2 = e * i - f * h, f * g - d * i, d * h - e * g
+    det = a * c0 + b * c1 + c * c2
+    if abs(det) <= 1e-13 * (abs(a * c0) + abs(b * c1) + abs(c * c2)):
+        return None
+    return [
+        (r[0] * c0 + b * (f * r[2] - r[1] * i) + c * (r[1] * h - e * r[2])) / det,
+        (a * (r[1] * i - f * r[2]) + r[0] * c1 + c * (d * r[2] - r[1] * g)) / det,
+        (a * (e * r[2] - r[1] * h) + b * (r[1] * g - d * r[2]) + r[0] * c2) / det,
+    ]
 
 
 def _box_lsq3(G: np.ndarray, c: np.ndarray, bb: float) -> tuple[np.ndarray, float]:
@@ -342,31 +370,43 @@ def _box_lsq3(G: np.ndarray, c: np.ndarray, bb: float) -> tuple[np.ndarray, floa
     ``G = A'A`` and ``c = A'b`` are the 3x3 normal equations.  Candidates are
     tried active set by active set; the first one that is feasible *and*
     satisfies the KKT sign conditions is the global optimum (the problem is a
-    convex QP), so this usually stops after one or two 3x3 solves.  That
-    matters because it runs on the order of a thousand times per slice.
+    convex QP), so this usually stops after one or two small solves.
+
+    Written with plain floats: it runs ~1,000 times per expiry, and on 3x3
+    arrays NumPy's per-call overhead was most of the build time (10 of 16 s
+    for a dense historical SPY chain).  A near-singular system falls back to
+    NumPy.
     """
-    tol = 1e-10 * (float(np.abs(c).max()) + 1.0)
-    best_x, best_f = None, np.inf
-    for free, fixed, vals in _ACTIVE_SETS:
-        x = np.zeros(3)
-        x[fixed] = vals
-        if len(free):
-            rhs = c[free] - G[np.ix_(free, fixed)] @ vals if len(fixed) else c[free]
-            try:
-                x[free] = np.linalg.solve(G[np.ix_(free, free)], rhs)
-            except np.linalg.LinAlgError:
+    g = G.tolist()
+    cc = c.tolist()
+    tol = 1e-10 * (max(abs(v) for v in cc) + 1.0)
+    best_x, best_f = None, math.inf
+    for free, fixed, vals in _ACTIVE_SETS_PY:
+        x = [0.0, 0.0, 0.0]
+        for i, v in zip(fixed, vals):
+            x[i] = v
+        if free:
+            rhs = [cc[i] - sum(g[i][j] * x[j] for j in fixed) for i in free]
+            sub = [[g[i][j] for j in free] for i in free]
+            sol = _solve_small(sub, rhs)
+            if sol is None:
+                try:
+                    sol = np.linalg.solve(np.array(sub), np.array(rhs)).tolist()
+                except np.linalg.LinAlgError:
+                    continue
+            for i, v in zip(free, sol):
+                x[i] = v
+            if any(x[i] < _LO[i] - 1e-12 or x[i] > _HI[i] + 1e-12 for i in free):
                 continue
-            if np.any(x < _LOWER - 1e-12) or np.any(x > _UPPER + 1e-12):
-                continue
-        grad = G @ x - c
-        at_lo = x[fixed] <= _LOWER[fixed]
-        kkt = np.all(np.where(at_lo, grad[fixed] >= -tol, grad[fixed] <= tol))
-        f = float(x @ G @ x - 2 * c @ x + bb)
+        grad = [g[i][0] * x[0] + g[i][1] * x[1] + g[i][2] * x[2] - cc[i] for i in range(3)]
+        kkt = all(grad[i] >= -tol if x[i] <= _LO[i] else grad[i] <= tol for i in fixed)
+        f = (sum(x[i] * (grad[i] + cc[i]) for i in range(3))
+             - 2 * (cc[0] * x[0] + cc[1] * x[1] + cc[2] * x[2]) + bb)
         if kkt:
-            return x, max(f, 0.0)
+            return np.array(x), max(f, 0.0)
         if f < best_f:  # feasible but not provably optimal; keep as fallback
             best_x, best_f = x, f
-    return best_x, max(best_f, 0.0)
+    return (np.array(best_x) if best_x is not None else None), max(best_f, 0.0)
 
 
 def _svi_inner(y: np.ndarray, w: np.ndarray, sw: np.ndarray, sigma: float):

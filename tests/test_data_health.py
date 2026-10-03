@@ -258,3 +258,22 @@ def test_full_report_flags_missing_rates(store):
         as_of=date(2026, 1, 8),
     )
     assert "MISSING" in rep.render()
+
+
+# ── Collection timing guard ──────────────────────────────────────────────
+
+
+def test_collection_timing_guard():
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+
+    from src.data.scheduler import collection_allowed
+
+    ny = ZoneInfo("America/New_York")
+    d = date(2026, 10, 2)                                   # a regular Friday session
+    assert collection_allowed(d, datetime(2026, 10, 2, 16, 30, tzinfo=ny))[0]
+    assert not collection_allowed(d, datetime(2026, 10, 2, 11, 0, tzinfo=ny))[0]   # intraday
+    assert not collection_allowed(d, datetime(2026, 10, 2, 16, 5, tzinfo=ny))[0]   # options still open
+    assert not collection_allowed(d, datetime(2026, 10, 5, 8, 0, tzinfo=ny))[0]    # next-morning catch-up
+    half = date(2026, 11, 27)                               # day after Thanksgiving: 13:00 close
+    assert collection_allowed(half, datetime(2026, 11, 27, 13, 30, tzinfo=ny))[0]

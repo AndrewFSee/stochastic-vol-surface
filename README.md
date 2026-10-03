@@ -28,6 +28,8 @@ stochastic-vol-surface/
 │   ├── data/                # Ingestion: options (yfinance), VIX, FRED rates, prices, Kaggle
 │   ├── surface/             # IV inversion, per-expiry SVI, grid, validation
 │   ├── features/            # Point-in-time feature table
+│   ├── forecast/            # Volatility forecasts: dataset, models, walk-forward evaluation
+│   ├── interpret/           # Claude interpretation of a ticker/date snapshot
 │   └── dashboard/           # Streamlit app
 ├── scripts/                 # CLI entry points
 ├── tests/                   # Pytest suite (offline, synthetic data)
@@ -49,15 +51,17 @@ cp .env.example .env
 # 3. Collect today's data (options + VIX + rates + prices + surfaces + features)
 python scripts/schedule_scraper.py --once
 
-# 4. Backfill the risk-free curve and underlying prices (both serve full history)
+# 4. Backfill rates, underlying prices and VIX history (all serve full history)
 python scripts/backfill_rates.py --start 2026-01-01
 python scripts/backfill_underlying.py --start 2024-01-01
+python scripts/backfill_vix.py --start 2024-01-01
 
 # 5. Build the surface corpus from every stored chain
 python scripts/build_surfaces.py --report data/logs/surface_build.csv
 
-# 6. Build the feature table (the main output)
+# 6. Build the feature table (the main output) and the vol forecasts
 python scripts/build_features.py
+python scripts/build_forecasts.py
 
 # 7. Check corpus health and surface accuracy at any time
 python scripts/data_health.py
@@ -95,6 +99,8 @@ data/
 ├── rates/rates_history.parquet                  # merged FRED curve
 ├── underlying/prices.parquet                    # daily OHLC, (date, ticker)
 ├── features/surface_features.parquet            # one row per (ticker, date)
+├── forecasts/vol_forecasts.parquet              # one row per (ticker, date, horizon)
+├── interpretations/ticker={T}/{D}.json          # cached Claude interpretations
 └── logs/scrape_runs.jsonl                       # one line per collection run
 ```
 
@@ -106,8 +112,8 @@ function rather than a single snapshot file.
 ### Daily automation
 
 `scripts/schedule_scraper.py --once` runs one full cycle — chains, VIX, rates,
-underlying prices, surfaces, then the feature table — skipping non-trading
-days via the NYSE calendar. On Windows it
+underlying prices, surfaces, the feature table, then the vol forecasts —
+skipping non-trading days via the NYSE calendar. On Windows it
 is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
 
@@ -163,6 +169,16 @@ history never silently mixes methods. The old pooled-bin pipeline
 (`grid_builder.build_surface_grid` / `interpolate_to_grid`) is still
 reachable with `method="rbf"` but should not feed features or models.
 
+### Design note: why not a joint SSVI fit
+
+A joint eSSVI fit (Gatheral–Jacquier SSVI with per-expiry ρ; θ and ρ per
+expiry plus two shared parameters) was evaluated in October 2026 as a way to
+steady thin chains. On SPY its fit error was 3–4× the per-expiry SVI's at
+every expiry (0.9 vs 0.3 vol pts), and its constrained smile shape moved the
+30d 25Δ risk reversal by about 2 vol points. It traded noise for bias, so it
+was not adopted. The remaining noise (see the feature table's noise floors)
+is quote-level, not model-level.
+
 ### Checking accuracy
 
 ```bash
@@ -212,8 +228,24 @@ ones.
 Vols are decimals (0.15 = 15%). **Nothing is extrapolated.** A feature whose
 tenor falls outside the listed expiries, or whose strike falls outside the
 quotes of the bracketing expiries, is NaN. For example, XLF often lists no
-expiry near 7 days. Butterflies are the noisiest features: they are
-second-order and small, so quote noise is a larger share of them.
+expiry near 7 days.
+
+**Noise floors.** Each feature's daily change mixes real moves with
+measurement noise. Treating the series as a random walk plus independent
+noise, the noise standard deviation is √(−ρ₁·Var(Δ)), where ρ₁ is the lag-1
+autocorrelation of daily changes. Estimated on the live corpus (Feb–Oct 2026),
+in vol points:
+
+| Feature | SPY, QQQ, IWM | AAPL, MSFT, TSLA, GLD | XLF |
+|---|---|---|---|
+| `atm_30d`, `vs_30d` | ~0.5 (2–3% of level) | 0–0.6 | 0.5–1.0 |
+| `rr25_30d` | ~0.3 (5–8% of level) | ~0.3 (15–22% of level) | ~0.4 |
+| `bf25_30d`, `bf25_91d` | 0.02–0.05 | 0.03–0.09 | ~0.15 |
+
+The 30d risk reversal on single names is the one feature where noise is a
+large share of the level. It is quote-level noise at the 25-delta strikes; it
+does not come from the 30-day interpolation (days when the bracketing
+expiries roll are no noisier). Prefer `_d5` changes or smoothing for it.
 
 ---
 
@@ -227,29 +259,40 @@ python scripts/backfill_kaggle.py --list          # inspect the dataset
 python scripts/backfill_kaggle.py --download      # all years
 python scripts/backfill_kaggle.py --download --years 2018 2020 2022
 
-# Build surfaces over the historical store
-python scripts/build_surfaces.py \
-    --options-dir data/historical/options \
-    --surfaces-dir data/historical/surfaces
+# Inputs of the same era: rates (for forwards), prices (realised vol), VIX
+python scripts/backfill_rates.py --start 2009-01-01
+python scripts/backfill_underlying.py -t SPY --start 2009-01-01
+python scripts/backfill_vix.py --start 2009-06-01
+
+# Surfaces (parallel; 2010–2023 takes about 45 minutes on 7 workers), then features
+python scripts/build_surfaces.py --options-dir data/historical/options \
+    --surfaces-dir data/historical/surfaces --report data/logs/surface_build_historical.csv
+python scripts/build_features.py --surfaces-dir data/historical/surfaces \
+    --out data/historical/features/surface_features.parquet
+python scripts/validate_surfaces.py --surfaces-dir data/historical/surfaces -t SPY
 ```
 
 Historical data lands in **`data/historical/`**, deliberately separate from the
 live yfinance corpus. The two differ in source, quote timing, and IV
 convention, so keeping them apart preserves provenance — and stops a
 2010-dated partition from breaking the daily freshness check. Pool them only
-deliberately, and re-run `scripts/backfill_rates.py --start 2009-01-01` first
-so historical forwards use the rates of their own era rather than today's.
+deliberately.
 
-> The historical surfaces on disk predate the per-expiry builder, so the
-> loaders skip them. Rebuild before use (about four hours for 2010–2023), then
-> build their features:
->
-> ```bash
-> python scripts/build_surfaces.py --options-dir data/historical/options \
->     --surfaces-dir data/historical/surfaces
-> python scripts/build_features.py --surfaces-dir data/historical/surfaces \
->     --out data/historical/features/surface_features.parquet
-> ```
+The VIX backfill is written to `data/vix/vix_0000_backfill.parquet`. Daily
+snapshots take precedence over it wherever the two overlap.
+
+Rebuilt in October 2026 with the per-expiry builder, the 2010–2023 corpus
+(3,508 days) checks out against VIX about as well as the live one: SPY's 30d
+variance swap has 0.969 daily-change correlation with VIX and a 0.42-pt mean
+absolute difference. On 2020-03-16 it read 82.1 against VIX's 82.7. Median fit
+error is 0.19 vol pts.
+
+To browse the history in the dashboard, point it at the historical store:
+
+```bash
+VSS_DATA_DIR=data/historical python -m streamlit run src/dashboard/app.py
+# PowerShell: $env:VSS_DATA_DIR="data/historical"; python -m streamlit run src/dashboard/app.py
+```
 
 ---
 
@@ -270,12 +313,98 @@ each surface. It computes nothing from live market data. One filter row
 | Term structure | ATM vol by days to expiry: as-of date vs 1 week and 1 month earlier, with the listed expiries |
 | Surface | Implied vol on a tenor × delta grid, its change over the comparison period, and an optional 3D view |
 | History | Implied vs realised vol, VRP, 25Δ risk reversal and term spread over time |
+| Forecast | 5- and 21-day vol forecasts with 80% ranges beside implied vol; forecast vs implied vs realised history; the forecast's track record |
+| Interpretation | A short written read of the ticker and date by Claude, generated on demand from the snapshot shown under "Inputs sent to Claude" |
 | Quality | SPY's 30d variance swap vs VIX (the accuracy check), plus fit error and expiry count per ticker |
 
 Every chart has a "Show data" table. Light and dark mode use separately
 validated palette steps. Cells outside the quoted region are blank, never
 extrapolated. Set `VSS_DATA_DIR` to point the app at another store; it
-defaults to `data`.
+defaults to the project's `data` folder.
+
+---
+
+## Volatility Forecasts
+
+`scripts/build_forecasts.py` (and the daily job) writes
+`data/forecasts/vol_forecasts.parquet`: for every ticker and date, forecasts
+of realised vol over the next 5 and 21 trading days, with an 80% range and
+the implied vol used. Every row is out-of-sample. The model is refitted
+monthly on targets already observed, so the stored history is also the
+forecast's track record and can be used as a point-in-time ML feature.
+
+**Model: HAR + implied vol, pooled across tickers.** It was chosen by
+walk-forward evaluation on SPY 2013–2023; `python scripts/evaluate_forecasts.py
+--lstm` reproduces the evaluation and writes `docs/forecast_evaluation.md`.
+
+| Model (QLIKE, lower is better; 2,399 common days) | 5-day | 21-day |
+|---|---|---|
+| HAR + implied | **0.387** | 0.430 |
+| HAR + implied + surface features | 0.386 | 0.450 |
+| Implied vol, recalibrated | 0.385 | 0.432 |
+| HAR | 0.445 | 0.426 |
+| Implied vol alone (raw) | 0.431 | **0.401** |
+| LSTM / LSTM-GARCH | 0.432 / 0.451 | 0.464 / 0.462 |
+| GARCH / GJR-GARCH | 0.492 / 0.498 | 0.435 / 0.457 |
+| Gradient boosting | 0.528 | 0.685 |
+
+- At 5 days, adding implied vol beats HAR decisively (Diebold-Mariano
+  p < 0.001). At 21 days nothing beats HAR significantly on QLIKE, but
+  HAR + implied has the best RMSE and log-variance R².
+- GARCH (returns only), gradient boosting and both LSTMs do worse. The
+  LSTMs are no better than plain HAR at 5 days (p = 0.46) and significantly
+  worse than HAR + implied (p ≤ 0.02 in a direct test). With about 2,400
+  overlapping daily targets, the flexible models overfit.
+- Inputs are each ticker's own surface: 7-day ATM vol for 5 days (14-day
+  where no 7-day expiry is listed, flagged), the 30-day variance swap for 21
+  days. Coefficients are pooled, because the seven tickers with only seven
+  months of history forecast much worse on their own.
+- Out-of-sample 80% ranges hold 78–80% of outcomes.
+- In the live 2026 sample, the model beats raw implied vol on index ETFs at
+  21 days, whose implied vol carries a large risk premium. On single stocks
+  and GLD, raw implied vol has been as good or better, probably because it
+  prices known events such as earnings. The Forecast tab shows both track
+  records side by side.
+
+### Are the features useful?
+
+On SPY 2010–2023, beyond the implied-vol level, no surface feature adds
+significant predictive power:
+
+- **Realised vol:** skew, butterfly, term structure, VVIX/SKEW and the
+  variance risk premium, added to HAR + implied one group at a time, were
+  all insignificant at both horizons (p > 0.08).
+- **Forward 21-day returns:** only implied vol survives a Bonferroni
+  correction (t = 3.6, R² 4%). The 25Δ risk reversal is nominally significant
+  (p = 0.006) but not after correction.
+- **Forward variance-swap P&L:** nothing predicts it.
+
+These are linear, one-index results. The features may still matter
+non-linearly, in combination, or across single stocks, but that needs more
+single-stock history than the live corpus has.
+
+---
+
+## Interpretation (Claude)
+
+The Interpretation tab sends a structured snapshot of the selected ticker
+and date to Claude (`claude-opus-5-5`) and shows a short written read. The
+snapshot holds levels, changes, percentiles labelled with the history behind
+them, the smile, term structure, realised vol, the forecast with its track
+record, data quality and peers.
+
+- **On demand and cached.** Nothing is sent until you press the button. Each
+  result is stored in `data/interpretations/` per ticker and date, keyed by a
+  hash of the snapshot, prompt version and model. Reopening is free, and a
+  rebuilt snapshot marks the old text as stale.
+- **Grounded.** The model is instructed to use only numbers in the snapshot,
+  separate observation from interpretation, respect the measured noise
+  floors, and not recommend trades. The exact inputs are shown under the
+  text.
+- **Setup:** add `ANTHROPIC_API_KEY=...` to `.env`. Requests opt into
+  Anthropic's server-side refusal fallback (`fallbacks: "default"`), so a
+  safety-classifier decline is retried on Anthropic's recommended model
+  rather than failing.
 
 ---
 
@@ -297,6 +426,7 @@ fits at exact tenors and deltas.
 | Variable | Description |
 |---|---|
 | `FRED_API_KEY` | FRED API key (free registration) |
+| `ANTHROPIC_API_KEY` | Claude API key for the dashboard's Interpretation tab |
 | `OPENAI_API_KEY` | Optional; only the experimental agent stubs use it |
 | `KAGGLE_USERNAME` | Kaggle username for backfill loader |
 | `KAGGLE_KEY` | Kaggle API key |
