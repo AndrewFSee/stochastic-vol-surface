@@ -414,51 +414,104 @@ def view_forecast(t: Theme, ticker: str, as_of: pd.Timestamp, window_days) -> No
         st.info("No forecast history in this window.")
         return
 
+    # ── 1. Outlook: the past up to today, then today's forecast ahead ─────
+    now = latest.loc[h] if h in latest.index else None
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hist["date"], y=100 * hist["hi80_vol"], mode="lines",
-                             line=dict(width=0), hoverinfo="skip", showlegend=False))
-    fig.add_trace(go.Scatter(x=hist["date"], y=100 * hist["lo80_vol"], mode="lines",
-                             line=dict(width=0), fill="tonexty",
-                             fillcolor=rgba(t.series[0], 0.12), name="80% range",
-                             hoverinfo="skip"))
-    for i, (col, name) in enumerate([
-        ("forecast_vol", "Forecast"),
-        ("implied_vol", "Implied"),
-        ("realised_vol", f"Realised over the next {h} days"),
-    ]):
+    fig.add_trace(go.Scatter(
+        x=hist["date"], y=100 * hist["trailing_vol"], mode="lines",
+        name="Realised, trailing 22 days", line=dict(width=2, color=t.series[2]),
+        hovertemplate="%{y:.1f}%<extra>realised (trailing)</extra>"))
+    fig.add_trace(go.Scatter(
+        x=hist["date"], y=100 * hist["implied_vol"], mode="lines",
+        name=f"Implied ({labels[h]})", line=dict(width=2, color=t.series[1]),
+        hovertemplate="%{y:.1f}%<extra>implied</extra>"))
+    if now is not None:
+        d0 = pd.Timestamp(now["date"])
+        d1 = D.window_end([d0], h).iloc[0]
+        f, lo, hi, iv = (100 * now[c] for c in ("forecast_vol", "lo80_vol", "hi80_vol", "implied_vol"))
+        fig.add_trace(go.Scatter(x=[d0, d1], y=[hi, hi], mode="lines", line=dict(width=0),
+                                 hoverinfo="skip", showlegend=False))
+        fig.add_trace(go.Scatter(x=[d0, d1], y=[lo, lo], mode="lines", line=dict(width=0),
+                                 fill="tonexty", fillcolor=rgba(t.series[0], 0.18),
+                                 name="Forecast 80% range", hoverinfo="skip"))
         fig.add_trace(go.Scatter(
-            x=hist["date"], y=100 * hist[col], mode="lines", name=name,
-            line=dict(width=2, color=t.series[i]),
-            hovertemplate="%{y:.1f}%<extra>" + name + "</extra>",
-        ))
-    style(fig, t, height=420, title=f"{ticker} {labels[h]} volatility: forecast, implied and realised",
+            x=[d0, d1], y=[f, f], mode="lines", name=f"Forecast, next {h} trading days",
+            line=dict(width=2, color=t.series[0]),
+            hovertemplate=f"forecast {f:.1f}% (80%: {lo:.1f}–{hi:.1f}%)<extra></extra>"))
+        fig.add_trace(go.Scatter(
+            x=[d0, d1], y=[iv, iv], mode="lines", showlegend=False,
+            line=dict(width=2, color=t.series[1]),
+            hovertemplate=f"implied {iv:.1f}%<extra></extra>"))
+        fig.add_vline(x=d0, line=dict(width=1, color=t.axis))
+        fig.add_annotation(x=d0, y=1, yref="paper", text="today", showarrow=False,
+                           xanchor="right", yanchor="top", xshift=-4,
+                           font=dict(size=11, color=t.ink_muted))
+        for y, txt in ((f, f"forecast {f:.1f}%"), (iv, f"implied {iv:.1f}%")):
+            fig.add_annotation(x=d1, y=y, text=txt, showarrow=False, xanchor="left",
+                               xshift=6, font=dict(size=11, color=t.ink_secondary))
+    style(fig, t, height=400, title=f"{ticker}: volatility so far, and the next {h} trading days",
           y_title="Annualised vol (%)")
-    # A filled band makes Plotly reverse the legend; keep it in trace order.
-    fig.update_layout(legend_traceorder="normal")
+    fig.update_layout(legend_traceorder="normal", margin=dict(r=110))
     _chart(fig)
+    st.caption(
+        "Left of today: realised volatility over the trailing 22 trading days and implied vol, "
+        f"as they stood each day. Right of today: the forecast for the next {h} trading days "
+        "(the average volatility expected over that window) with its 80% range, beside what "
+        "the options market implies for the same window."
+    )
 
-    tr = D.track_record(hist)
-    if tr.get("n"):
+    # ── 2. Track record: each forecast against what then happened ─────────
+    done = D.forecast_outcomes(hist, h)
+    if done.empty:
+        st.info(f"No completed {h}-day forecast windows in this range yet.")
+    else:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=done["window_end"], y=100 * done["hi80_vol"], mode="lines",
+                                 line=dict(width=0), hoverinfo="skip", showlegend=False))
+        fig.add_trace(go.Scatter(x=done["window_end"], y=100 * done["lo80_vol"], mode="lines",
+                                 line=dict(width=0), fill="tonexty",
+                                 fillcolor=rgba(t.series[0], 0.12), name="Forecast 80% range",
+                                 hoverinfo="skip"))
+        for i, (col, name) in enumerate([("forecast_vol", "Forecast"),
+                                         ("implied_vol", "Implied"),
+                                         ("realised_vol", "Realised (what happened)")]):
+            fig.add_trace(go.Scatter(
+                x=done["window_end"], y=100 * done[col], mode="lines", name=name,
+                line=dict(width=2, color=t.series[i]),
+                hovertemplate="%{y:.1f}%<extra>" + name + "</extra>"))
+        style(fig, t, height=380,
+              title=f"Track record: {h}-day forecasts against what happened",
+              y_title="Annualised vol (%)", x_title="Date the forecast window ended")
+        fig.update_layout(legend_traceorder="normal")
+        _chart(fig)
+
+        tr = D.track_record(hist)
         k = st.columns(4)
         k[0].metric("Forecast RMSE", f"{tr['rmse_forecast']:.2f} pts",
-                    help="Against realised vol, over this window's completed horizons.")
-        k[1].metric("Implied RMSE", f"{tr['rmse_implied']:.2f} pts")
+                    help="Typical miss of the forecast against realised vol, completed windows only.")
+        k[1].metric("Implied RMSE", f"{tr['rmse_implied']:.2f} pts",
+                    help="The same, using raw implied vol as the forecast.")
         k[2].metric("Forecast bias", f"{tr['bias_forecast']:+.2f} pts",
-                    help=f"Implied bias: {tr['bias_implied']:+.2f} pts (the risk premium).")
+                    help=f"Positive = forecasts ran high. Implied bias: {tr['bias_implied']:+.2f} pts "
+                         "(the volatility risk premium).")
         k[3].metric("80% range hit rate", f"{100 * tr['coverage80']:.0f}%",
-                    help="Share of realised outcomes inside the 80% range; ~80% is well calibrated.")
-    st.caption(
-        "HAR + implied vol, pooled across tickers, refitted monthly. Every point is "
-        "out-of-sample: it uses only data available on its date. Realised vol is "
-        "plotted at the forecast date and fills in once the horizon has passed. "
-        "Model choice: see docs/forecast_evaluation.md."
-    )
+                    help="Share of outcomes inside the 80% range; ~80% is well calibrated.")
+        st.caption(
+            f"Each point is a forecast made {h} trading days earlier, plotted on the day its "
+            "window closed, against the volatility that was actually realised over that window. "
+            "Lines that sit together mean an accurate forecast. Forecasts made in the last "
+            f"{h} trading days, including today's, are still open and join this chart as their "
+            "windows close. Model: HAR + implied vol, pooled across tickers, refitted monthly; "
+            "every point is out-of-sample (see docs/forecast_evaluation.md)."
+        )
+
     tbl = hist[["date", "forecast_vol", "lo80_vol", "hi80_vol", "implied_vol",
                 "realised_vol", "implied_input"]].copy()
+    tbl.insert(1, "window_ends", D.window_end(tbl["date"], h).dt.date.to_numpy())
     for c in ["forecast_vol", "lo80_vol", "hi80_vol", "implied_vol", "realised_vol"]:
         tbl[c] = (100 * tbl[c]).round(2)
     tbl["date"] = tbl["date"].dt.date
-    _table(tbl.iloc[::-1])
+    _table(tbl.rename(columns={"date": "forecast_made"}).iloc[::-1])
 
 
 def view_interpretation(feats: pd.DataFrame, ticker: str, as_of: pd.Timestamp) -> None:
