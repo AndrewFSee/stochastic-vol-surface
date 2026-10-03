@@ -1,6 +1,14 @@
-"""Volatility surface interpolation: SVI per-slice, cubic spline across tenors, RBF for 2D."""
+"""Volatility surface interpolation: SVI per-slice, cubic spline across tenors, RBF for 2D.
+
+High-level entry point
+----------------------
+:func:`fit_surface` – scatter DataFrame → (k_grid, t_grid, iv_grid)
+"""
 
 from __future__ import annotations
+
+import logging
+import math
 
 import numpy as np
 from scipy.interpolate import CubicSpline, RegularGridInterpolator
@@ -10,6 +18,8 @@ try:
     _HAS_RBF = True
 except ImportError:  # pragma: no cover
     _HAS_RBF = False
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -21,11 +31,27 @@ def svi_raw(k: np.ndarray, a: float, b: float, rho: float, m: float, sigma: floa
     return a + b * (rho * (k - m) + np.sqrt((k - m) ** 2 + sigma ** 2))
 
 
+def svi_min_variance(a: float, b: float, rho: float, sigma: float) -> float:
+    """Return the global minimum of a raw-SVI slice.
+
+    Raw SVI attains its minimum at ``k - m = -rho*sigma/sqrt(1-rho^2)``, where
+    ``w = a + b*sigma*sqrt(1-rho^2)``.  Requiring this to be non-negative is
+    the standard condition for ``w(k) >= 0`` at every strike.
+    """
+    return a + b * sigma * math.sqrt(max(1.0 - rho ** 2, 0.0))
+
+
 def interpolate_svi_slice(
     log_moneyness: np.ndarray,
     total_var: np.ndarray,
 ) -> tuple[np.ndarray, dict]:
     """Fit SVI to a single tenor slice and evaluate on a dense grid.
+
+    The fit is constrained so total variance stays non-negative everywhere
+    (``a + b*sigma*sqrt(1-rho^2) >= 0``).  Without it the optimiser happily
+    returns a slice that fits the quoted strikes well but goes negative in an
+    unquoted wing, which then gets floored to ~0 and produces a near-zero
+    implied vol on the standardised grid.
 
     Returns the dense-grid total-variance array and the fitted parameter dict.
     """
@@ -45,6 +71,46 @@ def interpolate_svi_slice(
                    options={"maxiter": 2000, "ftol": 1e-12})
 
     a, b, rho, m, sigma = res.x
+
+    # Repair only if the unconstrained fit is actually negative somewhere.
+    # The constraint is deliberately NOT folded into `loss` above: a hard
+    # penalty wall inside an L-BFGS-B objective breaks its finite-difference
+    # gradients and degrades slices that were fitting perfectly well.
+    if svi_min_variance(a, b, rho, sigma) < 0:
+        logger.debug("SVI slice negative in the wing (min w=%.3e) — repairing",
+                     svi_min_variance(a, b, rho, sigma))
+
+        def sse(p):
+            return float(np.sum((svi_raw(log_moneyness, *p) - total_var) ** 2))
+
+        cons = [{
+            "type": "ineq",
+            "fun": lambda p: svi_min_variance(p[0], p[1], p[2], p[4]),
+        }]
+        # Seed from the unconstrained solution, lifted to be feasible, so the
+        # constrained search starts near the shape the data actually implies.
+        seed = [a - svi_min_variance(a, b, rho, sigma), b, rho, m, sigma]
+        seed[0] = float(np.clip(seed[0], bounds[0][0], bounds[0][1]))
+
+        best = None
+        for start in (seed, x0):
+            try:
+                r2 = minimize(sse, start, method="SLSQP", bounds=bounds,
+                              constraints=cons,
+                              options={"maxiter": 500, "ftol": 1e-12})
+            except Exception:
+                continue
+            if svi_min_variance(r2.x[0], r2.x[1], r2.x[2], r2.x[4]) >= 0:
+                if best is None or r2.fun < best.fun:
+                    best = r2
+
+        if best is not None:
+            a, b, rho, m, sigma = best.x
+        else:
+            # Last resort: lift the level so the slice is non-negative,
+            # preserving the fitted shape.
+            a = a - svi_min_variance(a, b, rho, sigma)
+
     w_fit = svi_raw(log_moneyness, a, b, rho, m, sigma)
     params = dict(a=a, b=b, rho=rho, m=m, sigma=sigma)
     return w_fit, params
@@ -123,3 +189,36 @@ def build_regular_grid_interpolator(
         bounds_error=bounds_error,
         fill_value=fill_value,
     )
+
+
+# ---------------------------------------------------------------------------
+# High-level entry point
+# ---------------------------------------------------------------------------
+
+def fit_surface(
+    scatter_df,
+    k_grid: np.ndarray | None = None,
+    t_grid: np.ndarray | None = None,
+    method: str = "svi",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit an IV surface from a scatter DataFrame.
+
+    This is a thin convenience wrapper that delegates to
+    :func:`grid_builder.interpolate_to_grid` so that either module can be
+    the caller's entry point.
+
+    Parameters
+    ----------
+    scatter_df : pd.DataFrame
+        Output of :func:`grid_builder.build_surface_grid`.
+    k_grid, t_grid : array-like or None
+        Defaults to ``config/surface_grid.yaml``.
+    method : ``"svi"`` | ``"rbf"``
+
+    Returns
+    -------
+    k_nodes, t_nodes, iv_grid
+    """
+    from src.surface.grid_builder import interpolate_to_grid
+
+    return interpolate_to_grid(scatter_df, k_grid=k_grid, tenor_grid=t_grid, method=method)

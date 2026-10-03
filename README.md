@@ -1,6 +1,19 @@
-# Deep Stochastic Volatility Surface Modeler
+# Stochastic Vol Surface
 
-A production-grade Python framework that scrapes live options chains, builds arbitrage-free implied-volatility surfaces, calibrates parametric models (SABR, Heston, SVI, rough-Bergomi), and trains a Neural SDE to learn residual dynamics.  Tradeable signals and a walk-forward backtest engine are included, together with a Streamlit dashboard.
+Daily implied-volatility surfaces for SPY and other liquid US equity and ETF
+options, a point-in-time feature table built from them for downstream models,
+and a dashboard for reading both.
+
+The pipeline: scrape option chains each day after the close, fit an SVI smile
+per expiry on parity-implied forwards, interpolate to constant maturities,
+derive level, skew, term-structure, variance-swap and realised-vol features,
+and serve them in a Streamlit dashboard. SPY's rebuilt 30-day variance swap
+tracks VIX with 0.98 daily-change correlation; `scripts/validate_surfaces.py`
+re-checks this.
+
+Research code that is not validated against market data (parametric models,
+a neural SDE, trading signals, a backtest engine, LLM agent stubs) lives in
+[`experimental/`](experimental/README.md), outside the main package.
 
 ---
 
@@ -8,20 +21,17 @@ A production-grade Python framework that scrapes live options chains, builds arb
 
 ```
 stochastic-vol-surface/
-├── config/                  # YAML configuration
-│   ├── default.yaml         # Scraper, model, signal, backtest params
-│   └── surface_grid.yaml    # Log-moneyness × tenor grid
+├── config/
+│   ├── default.yaml         # Scraper tickers and settings
+│   └── surface_grid.yaml    # Log-moneyness × tenor grid of the stored surfaces
 ├── src/
-│   ├── data/                # Ingestion: yfinance, FRED, Kaggle
-│   ├── surface/             # IV inversion, grid builder, interpolation, filters
-│   ├── models/              # SABR, Heston, SVI, rough-Bergomi, calibration
-│   ├── neural/              # Neural SDE, encoder, decoder, training
-│   ├── signals/             # Skew, term-structure, butterfly, regime signals
-│   ├── backtest/            # Walk-forward engine, strategies, Greeks, metrics
-│   ├── dashboard/           # Streamlit app
-│   └── agents/              # LLM-based analyst / recommender / narrator stubs
-├── scripts/                 # CLI entry-points
-└── tests/                   # Pytest test suite
+│   ├── data/                # Ingestion: options (yfinance), VIX, FRED rates, prices, Kaggle
+│   ├── surface/             # IV inversion, per-expiry SVI, grid, validation
+│   ├── features/            # Point-in-time feature table
+│   └── dashboard/           # Streamlit app
+├── scripts/                 # CLI entry points
+├── tests/                   # Pytest suite (offline, synthetic data)
+└── experimental/            # Parked research code; see experimental/README.md
 ```
 
 ---
@@ -29,36 +39,36 @@ stochastic-vol-surface/
 ## Quick Start
 
 ```bash
-# 1. Clone & install
-git clone https://github.com/your-org/stochastic-vol-surface.git
-cd stochastic-vol-surface
+# 1. Install
 pip install -e ".[dev]"
 
 # 2. Configure secrets
 cp .env.example .env
-# edit .env with your FRED_API_KEY and OPENAI_API_KEY
+# edit .env with your FRED_API_KEY (and Kaggle credentials for the historical backfill)
 
-# 3. Scrape today's options chains
-python scripts/scrape.py --tickers SPY QQQ AAPL MSFT
+# 3. Collect today's data (options + VIX + rates + prices + surfaces + features)
+python scripts/schedule_scraper.py --once
 
-# 4. Backfill historical data from Kaggle
-python scripts/backfill.py path/to/spy_options_iv.csv
+# 4. Backfill the risk-free curve and underlying prices (both serve full history)
+python scripts/backfill_rates.py --start 2026-01-01
+python scripts/backfill_underlying.py --start 2024-01-01
 
-# 5. Calibrate parametric models
-python scripts/calibrate.py --start 2023-01-01 --end 2023-12-31
+# 5. Build the surface corpus from every stored chain
+python scripts/build_surfaces.py --report data/logs/surface_build.csv
 
-# 6. Train the Neural SDE
-python scripts/train.py --epochs 100 --batch-size 32
+# 6. Build the feature table (the main output)
+python scripts/build_features.py
 
-# 7. Run walk-forward backtest
-python scripts/backtest.py --start 2022-01-01 --end 2023-12-31
+# 7. Check corpus health and surface accuracy at any time
+python scripts/data_health.py
+python scripts/validate_surfaces.py --strict
 
-# 8. Generate HTML tearsheet
-python scripts/tearsheet.py --output reports/tearsheet.html
-
-# 9. Launch dashboard
-streamlit run src/dashboard/app.py
+# 8. Launch the dashboard
+python -m streamlit run src/dashboard/app.py
 ```
+
+On Windows without an activated virtual environment, call its interpreter
+directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 
 ---
 
@@ -66,71 +76,219 @@ streamlit run src/dashboard/app.py
 
 | Source | Module | Description |
 |---|---|---|
-| yfinance | `src/data/scraper.py` | Daily SPY/QQQ/AAPL/MSFT options chains |
+| yfinance | `src/data/scraper.py` | Daily options chains (8 tickers) |
 | yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, SKEW, VVIX |
-| FRED API | `src/data/rates.py` | Risk-free rates (DGS1MO…DGS10) |
+| FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
+| yfinance | `src/data/underlying.py` | Daily OHLC for the tickers (realised vol) |
 | Kaggle | `src/data/kaggle_loader.py` | Historical SPY IV dataset |
 | Parquet | `src/data/storage.py` | Partitioned storage with dedup |
+| — | `src/data/health.py` | Coverage / freshness / quality reporting |
+
+### Storage layout
+
+```
+data/
+├── options/ticker={T}/date={D}/chain.parquet    # raw chains
+├── surfaces/ticker={T}/date={D}/surface.parquet # 25 × 8 IV grids
+├── vix/vix_{D}.parquet                          # rolling 5-day snapshots
+│   └── vix_history.parquet                      # consolidated series
+├── rates/rates_history.parquet                  # merged FRED curve
+├── underlying/prices.parquet                    # daily OHLC, (date, ticker)
+├── features/surface_features.parquet            # one row per (ticker, date)
+└── logs/scrape_runs.jsonl                       # one line per collection run
+```
+
+Each daily VIX snapshot stores a rolling 5-day window, so consecutive files
+overlap. `load_vix_history()` merges them, which recovers values that had not
+settled when first collected (notably `SKEW`). Always read VIX through that
+function rather than a single snapshot file.
+
+### Daily automation
+
+`scripts/schedule_scraper.py --once` runs one full cycle — chains, VIX, rates,
+underlying prices, surfaces, then the feature table — skipping non-trading
+days via the NYSE calendar. On Windows it
+is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
+16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
+
+---
+
+## Surface Corpus
+
+`src/surface/batch.py` turns the raw chain store into the standardised surface
+store that the feature table and dashboard read (and the experimental models).
+
+* **Resumable** — existing surfaces are skipped unless `--overwrite`, so the
+  daily incremental run costs one build per ticker.
+* **Real rates** — the discount rate is the FRED curve interpolated to each
+  snapshot's tenor, not a hard-coded constant.
+* **Quality-gated** — every grid is scored before it is written; non-finite or
+  implausible grids are rejected rather than poisoning training data.
+
+```python
+from src.surface.batch import load_surface_history
+
+dates, k_grid, t_grid, grids = load_surface_history("SPY")
+# grids.shape == (n_dates, 25, 8)
+```
 
 ---
 
 ## Surface Construction
 
-1. **IV Inversion** (`src/surface/implied_vol.py`) – Brent's method on Black-Scholes
-2. **Grid Builder** (`src/surface/grid_builder.py`) – raw chain → log-moneyness × tenor grid
-3. **Interpolation** (`src/surface/interpolation.py`) – SVI per slice, cubic spline across tenors, RBF for 2D
-4. **Filters** (`src/surface/filters.py`) – butterfly (convexity) + calendar (monotonicity) arbitrage removal
-5. **VolSurface** (`src/surface/surface.py`) – `RegularGridInterpolator`-backed query object
+Surfaces are built **one expiry at a time** (`src/surface/slices.py`, builder
+`expiry-svi/1`):
+
+1. **Clean quotes** – two-sided markets only, bounded relative spread.
+2. **Implied forward** – from put-call parity near the money, per expiry.
+   This carries dividends and borrow; `S·e^{rT}` is ~0.9% too high for SPY at
+   two years and ~2% for XLF.
+3. **OTM Black-76 IVs** – inverted from bid/ask mids (vectorised solver in
+   `src/surface/implied_vol.py`); puts below the forward, calls above. Yahoo's
+   own `impliedVolatility` is not used when prices are available.
+4. **SVI per expiry** – quasi-explicit fit, weighted by bid-ask spread in vol
+   terms, constrained to positive variance and Lee's wing bound, with one
+   round of outlier rejection.
+5. **Across tenors** – total variance linear in T between the two bracketing
+   expiries (VIX's constant-maturity construction), then a calendar
+   monotonicity clean-up (`src/surface/filters.py`).
+6. **VolSurface** (`src/surface/surface.py`) – grid plus an `observed` mask
+   (False where a cell is extrapolated beyond quoted strikes or expiries) and
+   the per-expiry fits (forward, SVI params, fit RMSE) in the file metadata.
+
+Each saved surface records its builder. `build_surfaces.py` rebuilds
+surfaces from an older builder instead of skipping them, and
+`load_surface_history` loads only the current builder by default, so a
+history never silently mixes methods. The old pooled-bin pipeline
+(`grid_builder.build_surface_grid` / `interpolate_to_grid`) is still
+reachable with `method="rbf"` but should not feed features or models.
+
+### Checking accuracy
+
+```bash
+python scripts/validate_surfaces.py --strict
+```
+
+Rebuilds SPY's 30-day variance-swap vol from the fitted smiles and compares
+it with VIX (same definition, computed by CBOE from SPX). It also reports
+daily-change noise for every ticker. A strongly negative lag-1
+autocorrelation of daily changes means jumps that revert the next day, which
+is measurement noise.
 
 ---
 
-## Parametric Models
+## Feature Table
 
-| Model | Module | Method |
+`data/features/surface_features.parquet` is the project's main output: one
+point-in-time row per (ticker, trading date), for the dashboard and for
+downstream models. `scripts/build_features.py` rebuilds it in full from the
+surface, price and VIX stores, and the daily run does the same.
+
+```python
+from src.features import load_feature_table
+
+df = load_feature_table(tickers=["SPY", "QQQ"], start="2026-06-01")
+```
+
+**Timing.** Row *t* uses only what was known at about 16:30 ET on *t*: that
+day's option snapshot, the underlying's close and the VIX closes. To predict
+anything over `(t, t+h]`, use row *t*. Rolling statistics are trailing and
+include *t*. A test checks that appending later rows never changes earlier
+ones.
+
+| Group | Columns | Notes |
 |---|---|---|
-| SABR | `src/models/sabr.py` | Hagan (2002) approximation, L-BFGS-B calibration |
-| Heston | `src/models/heston.py` | Characteristic function + FFT pricing |
-| SVI | `src/models/svi.py` | Gatheral raw SVI, quasi-explicit fit |
-| rough-Bergomi | `src/models/rough_bergomi.py` | Monte Carlo pricing |
+| ATM term structure | `atm_{7,14,30,60,91,182,365}d` | Forward-ATM implied vol at constant maturity |
+| Smile (30d, 91d) | `iv_{p10,p25,c25,c10}_*`, `rr25_*`, `bf25_*`, `rr10_*`, `bf10_*`, `atm_skew_*`, `atm_curv_*` | Exact forward-delta strikes; `rr` = call − put |
+| Variance swap | `vs_30d`, `vs_91d` | Model-free, VIX's definition |
+| Term spreads | `ts_7_30`, `ts_30_91`, `ts_30_365` | Longer minus shorter ATM vol |
+| Carry | `fwd_carry_1y` | ln(F/S)/T: rate − dividend − borrow. Level only; daily changes are mostly noise |
+| Realised | `ret_{1,5,21}d`, `rv_cc_{10,21,63}d`, `rv_yz_21d` | Zero-mean close-to-close and Yang-Zhang |
+| Premia | `vrp_30d`, `vrp_var_30d` | ATM − RV in vol; VS² − RV² in variance |
+| Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vvix`, `mkt_skew` | Same for every ticker |
+| Dynamics | `<col>_d1`, `_d5`, `_z63`, `_pct252` | For the key columns; laid on the NYSE calendar, so a missing day is a gap, not a 2-day change |
+| Quality | `n_expiries`, `nearest_expiry_days`, `fit_rmse`, `parity_fraction` | Use to down-weight weak days |
 
-Model selection via AIC/BIC is in `src/models/model_selection.py`.
-
----
-
-## Neural SDE
-
-The `NeuralSDE` (`src/neural/neural_sde.py`) models the latent vol-surface dynamics:
-
-```
-dY_t = f_θ(t, Y_t) dt + g_θ(t, Y_t) dW_t
-```
-
-where `f` and `g` are MLPs.  A `SurfaceEncoder` (Conv2D) compresses daily snapshots to a latent vector, and a `SurfaceDecoder` (MLP) reconstructs predicted surfaces.  The model learns residuals between market IV and best-fit parametric IV.
+Vols are decimals (0.15 = 15%). **Nothing is extrapolated.** A feature whose
+tenor falls outside the listed expiries, or whose strike falls outside the
+quotes of the bracketing expiries, is NaN. For example, XLF often lists no
+expiry near 7 days. Butterflies are the noisiest features: they are
+second-order and small, so quote noise is a larger share of them.
 
 ---
 
-## Signals
+## Historical backfill
 
-| Signal | Module |
+The live corpus starts in Feb 2026 and contains no crisis regime. Historical
+SPY chains fill that gap without waiting:
+
+```bash
+python scripts/backfill_kaggle.py --list          # inspect the dataset
+python scripts/backfill_kaggle.py --download      # all years
+python scripts/backfill_kaggle.py --download --years 2018 2020 2022
+
+# Build surfaces over the historical store
+python scripts/build_surfaces.py \
+    --options-dir data/historical/options \
+    --surfaces-dir data/historical/surfaces
+```
+
+Historical data lands in **`data/historical/`**, deliberately separate from the
+live yfinance corpus. The two differ in source, quote timing, and IV
+convention, so keeping them apart preserves provenance — and stops a
+2010-dated partition from breaking the daily freshness check. Pool them only
+deliberately, and re-run `scripts/backfill_rates.py --start 2009-01-01` first
+so historical forwards use the rates of their own era rather than today's.
+
+> The historical surfaces on disk predate the per-expiry builder, so the
+> loaders skip them. Rebuild before use (about four hours for 2010–2023), then
+> build their features:
+>
+> ```bash
+> python scripts/build_surfaces.py --options-dir data/historical/options \
+>     --surfaces-dir data/historical/surfaces
+> python scripts/build_features.py --surfaces-dir data/historical/surfaces \
+>     --out data/historical/features/surface_features.parquet
+> ```
+
+---
+
+## Dashboard
+
+```bash
+python -m streamlit run src/dashboard/app.py
+```
+
+The dashboard reads the feature table and the per-expiry fits stored with
+each surface. It computes nothing from live market data. One filter row
+(ticker, as-of date, history window, comparison period) scopes every view:
+
+| Tab | Shows |
 |---|---|
-| 25-delta skew | `src/signals/skew_signals.py` |
-| Term-structure slope/curvature | `src/signals/term_structure.py` |
-| Butterfly mispricing | `src/signals/butterfly.py` |
-| Calendar spread arbitrage | `src/signals/calendar_spread.py` |
-| Vol regime (Low/Normal/High/Crisis) | `src/signals/regime_vol.py` |
-| Composite recommendation | `src/signals/composite.py` |
+| Overview | Every ticker on one row: 30d ATM level, 1-day change, 1-year percentile, 3-month sparkline, variance swap, realised vol, VRP, risk reversal, butterfly, term spread, fit error |
+| Smile | Fitted SVI smiles drawn over the market quotes they came from (mid ± half spread), with the 25Δ strikes marked |
+| Term structure | ATM vol by days to expiry: as-of date vs 1 week and 1 month earlier, with the listed expiries |
+| Surface | Implied vol on a tenor × delta grid, its change over the comparison period, and an optional 3D view |
+| History | Implied vs realised vol, VRP, 25Δ risk reversal and term spread over time |
+| Quality | SPY's 30d variance swap vs VIX (the accuracy check), plus fit error and expiry count per ticker |
 
----
-
-## Backtest
-
-Walk-forward engine in `src/backtest/engine.py` with daily rebalancing.  Strategies include delta-hedged straddles, risk-reversals, and butterflies.  Metrics: Sharpe, Sortino, max drawdown, win rate, P&L attribution.
+Every chart has a "Show data" table. Light and dark mode use separately
+validated palette steps. Cells outside the quoted region are blank, never
+extrapolated. Set `VSS_DATA_DIR` to point the app at another store; it
+defaults to `data`.
 
 ---
 
 ## Configuration
 
-Edit `config/default.yaml` to change tickers, model hyperparameters, signal thresholds, and backtest parameters. Edit `config/surface_grid.yaml` to change the grid resolution.
+Edit `config/default.yaml` to change the tickers and scraper settings.
+Parameters for the parked research code are in `experimental/config.yaml`.
+
+`config/surface_grid.yaml` (25 log-moneyness knots × 8 tenors) defines the
+grid stored with each surface. Changing it invalidates every surface already
+built, so re-run `scripts/build_surfaces.py --overwrite` afterwards. The
+feature table does not depend on it: features are read from the per-expiry
+fits at exact tenors and deltas.
 
 ---
 
@@ -139,7 +297,7 @@ Edit `config/default.yaml` to change tickers, model hyperparameters, signal thre
 | Variable | Description |
 |---|---|
 | `FRED_API_KEY` | FRED API key (free registration) |
-| `OPENAI_API_KEY` | OpenAI API key for agent stubs |
+| `OPENAI_API_KEY` | Optional; only the experimental agent stubs use it |
 | `KAGGLE_USERNAME` | Kaggle username for backfill loader |
 | `KAGGLE_KEY` | Kaggle API key |
 
@@ -150,6 +308,38 @@ Edit `config/default.yaml` to change tickers, model hyperparameters, signal thre
 ```bash
 pytest tests/ -v
 ```
+
+The suite is offline — every test builds its own synthetic chains in a
+temporary store, so no network access or collected data is required.
+
+> **Note:** `pyproject.toml` pins pytest's scratch space to `.pytest_tmp/`
+> inside the project. The default Windows location
+> (`%LOCALAPPDATA%\Temp\pytest-of-<user>`) is not readable on this machine,
+> which breaks every `tmp_path`-based test. pytest wipes that directory on each
+> run, so do not put anything else there.
+
+### Checking the live corpus
+
+`pytest` validates the code; `scripts/data_health.py` validates the *data*:
+
+```bash
+python scripts/data_health.py                     # full report
+python scripts/data_health.py --strict            # exit 1 if stale (for cron/CI)
+python scripts/data_health.py --csv-dir data/logs/health
+```
+
+It reports collection freshness, per-ticker gaps against the NYSE calendar,
+snapshot quality, surface-build coverage, and the VIX / rates stores.
+
+---
+
+## Experimental
+
+[`experimental/`](experimental/README.md) holds the parametric models (SABR,
+Heston, SVI, rough Bergomi), the neural SDE, the trading signals, the
+walk-forward backtest engine and the LLM agent stubs. None of it has been
+validated against market data. It is outside the installed `src` package, and
+its tests run separately (`pytest experimental/tests`).
 
 ---
 
