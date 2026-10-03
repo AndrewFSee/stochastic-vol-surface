@@ -233,6 +233,22 @@ def run_collection(
             logger.exception("Feature build failed")
             errors.append(f"Features: {exc}")
 
+    # ── 6. Volatility forecasts ───────────────────────────────────────────
+    # After the features they read; rebuilt in full (walk-forward, ~15 s).
+    if cfg.build_features and total_rows > 0:
+        try:
+            from src.forecast.forecaster import build_forecasts, save_forecasts
+
+            fc = build_forecasts(underlying_dir=cfg.underlying_dir)
+            if fc.empty:
+                errors.append("Forecasts: none built")
+            else:
+                save_forecasts(fc)
+                logger.info("Forecasts: %d rows", len(fc))
+        except Exception as exc:
+            logger.exception("Forecast build failed")
+            errors.append(f"Forecasts: {exc}")
+
     result = ScrapeResult(
         as_of=as_of,
         tickers=cfg.tickers,
