@@ -52,27 +52,78 @@ def is_market_open(d: date) -> bool:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def run_collection(cfg: ScraperConfig, as_of: Optional[date] = None) -> ScrapeResult:
+#: Equity-ETF options trade until 16:15 ET, a quarter hour after the stock
+#: close; collect only once they have stopped moving.
+OPTIONS_CLOSE_LAG = timedelta(minutes=15)
+
+
+def session_close(d: date, tz: str = "America/New_York") -> datetime:
+    """The NYSE close on *d* as an aware datetime (13:00 on half days)."""
+    from zoneinfo import ZoneInfo
+
+    try:
+        import pandas_market_calendars as mcal
+
+        sched = mcal.get_calendar("NYSE").schedule(d.isoformat(), d.isoformat())
+        if len(sched):
+            return sched["market_close"].iloc[0].to_pydatetime().astimezone(ZoneInfo(tz))
+    except ImportError:
+        pass
+    return datetime(d.year, d.month, d.day, 16, 0, tzinfo=ZoneInfo(tz))
+
+
+def collection_allowed(as_of: date, now: datetime) -> tuple[bool, str]:
+    """Whether a scrape at *now* yields closing quotes for *as_of*.
+
+    yfinance returns whatever is quoted at the moment of the call, stamped
+    with *as_of*.  So a run before that session's options close stores
+    intraday quotes as the close, and a run on a later day (e.g. a missed
+    16:30 task caught up the next morning) stores the wrong day's quotes
+    under *as_of*.  Both corrupt the history silently.
+    """
+    if now.date() != as_of:
+        return False, (f"as-of {as_of} is not today ({now.date()}); quotes now "
+                       f"would not be {as_of}'s close")
+    ready = session_close(as_of, str(now.tzinfo)) + OPTIONS_CLOSE_LAG
+    if now < ready:
+        return False, f"before the options close ({ready:%H:%M %Z}); quotes are intraday"
+    return True, ""
+
+
+def run_collection(
+    cfg: ScraperConfig,
+    as_of: Optional[date] = None,
+    *,
+    force: bool = False,
+) -> ScrapeResult:
     """Execute a single collection cycle (options + VIX + rates).
 
-    Skips the run entirely if the NYSE is closed (holiday / weekend)
-    and returns a zero-row ``ScrapeResult``.
+    Skips the run entirely if the NYSE is closed (holiday / weekend), or if
+    it is not after that session's options close (see
+    :func:`collection_allowed`; *force* overrides this), and returns a
+    zero-row ``ScrapeResult``.
 
     Parameters
     ----------
     cfg : ScraperConfig
         Validated configuration (tickers, paths, flags).
     as_of : date or None
-        Stamp for the run; defaults to today.
+        Stamp for the run; defaults to today in ``cfg.timezone``.
+    force : bool
+        Collect even before the close or for another day.  For deliberate
+        manual runs only — the quotes are stored as *as_of*'s close.
 
     Returns
     -------
     ScrapeResult   with metadata about the run.
     """
+    from zoneinfo import ZoneInfo
+
     from src.data.scraper import scrape_all
     from src.data.storage import save_options_chain
 
-    as_of = as_of or date.today()
+    now = datetime.now(ZoneInfo(cfg.timezone))
+    as_of = as_of or now.date()
 
     # ── Holiday guard ─────────────────────────────────────────────────────
     if not is_market_open(as_of):
@@ -84,6 +135,13 @@ def run_collection(cfg: ScraperConfig, as_of: Optional[date] = None) -> ScrapeRe
             partitions_written=0,
             errors=["Market closed — skipped"],
         )
+
+    # ── Timing guard ──────────────────────────────────────────────────────
+    ok, why = collection_allowed(as_of, now)
+    if not ok and not force:
+        logger.warning("Not collecting: %s. Use --force to override.", why)
+        return ScrapeResult(as_of=as_of, tickers=cfg.tickers, total_rows=0,
+                            partitions_written=0, errors=[f"Skipped: {why}"])
 
     errors: list[str] = []
     total_rows = 0

@@ -172,3 +172,42 @@ def vix_term_structure_signal(vix_dir: str = DEFAULT_VIX_DIR) -> pd.DataFrame:
     if {"VVIX", "VIX"} <= set(out.columns):
         out["vvix_vix"] = out["VVIX"] / out["VIX"]
     return out
+
+
+#: Backfill file name.  load_vix_history merges files in name order with later
+#: files winning, and this sorts before every dated snapshot, so collected
+#: snapshots always take precedence where the two overlap.
+BACKFILL_FILENAME = "vix_0000_backfill.parquet"
+
+
+def backfill_vix_history(
+    start: str,
+    end: Optional[str] = None,
+    vix_dir: str = DEFAULT_VIX_DIR,
+) -> pd.DataFrame:
+    """Download the VIX family for ``[start, end)`` into the backfill file.
+
+    Unlike option chains, index history is always available, so features for
+    historical surfaces (and the SPY-vs-VIX check on them) can use it.
+    Re-running merges into the existing backfill (new values win), so a short
+    range never erases a longer one already stored; dated snapshots are
+    untouched.
+    """
+    from pathlib import Path
+
+    end = end or pd.Timestamp.today().strftime("%Y-%m-%d")
+    df = fetch_vix_family(start=start, end=end)
+    if df.empty:
+        logger.error("No VIX-family history returned for %s..%s", start, end)
+        return df
+    out = Path(vix_dir) / BACKFILL_FILENAME
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        existing = pd.read_parquet(out)
+        existing.index = pd.to_datetime(existing.index)
+        df = df.combine_first(existing).sort_index()
+        df.index.name = "date"
+    df.to_parquet(out, engine="pyarrow")
+    logger.info("Saved VIX backfill: %d dates (%s -> %s) -> %s",
+                len(df), df.index.min().date(), df.index.max().date(), out)
+    return df

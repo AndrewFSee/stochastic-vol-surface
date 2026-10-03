@@ -67,8 +67,10 @@ _yaml_cfg = _load_yaml_scraper_cfg()
 @click.option("--features/--no-features", default=True, show_default=True,
               help="Rebuild the feature table after the surfaces")
 @click.option("--once", is_flag=True, help="Run once immediately then exit")
+@click.option("--force", is_flag=True,
+              help="Collect even before the options close (stores intraday quotes as the close)")
 def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
-         prices, features, once):
+         prices, features, once, force):
     """Launch the daily data-collection scheduler (options + VIX + rates + surfaces)."""
     try:
         from dotenv import load_dotenv
@@ -95,7 +97,7 @@ def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
 
     if once:
         click.echo(f"Running single collection for {cfg.tickers} …")
-        result = run_collection(cfg)
+        result = run_collection(cfg, force=force)
         click.echo(f"  Options:  {result.total_rows:,} rows → {result.partitions_written} partitions")
         if result.vix_snapshot:
             click.echo(f"  VIX snap: {result.vix_snapshot}")

@@ -49,9 +49,10 @@ cp .env.example .env
 # 3. Collect today's data (options + VIX + rates + prices + surfaces + features)
 python scripts/schedule_scraper.py --once
 
-# 4. Backfill the risk-free curve and underlying prices (both serve full history)
+# 4. Backfill rates, underlying prices and VIX history (all serve full history)
 python scripts/backfill_rates.py --start 2026-01-01
 python scripts/backfill_underlying.py --start 2024-01-01
+python scripts/backfill_vix.py --start 2024-01-01
 
 # 5. Build the surface corpus from every stored chain
 python scripts/build_surfaces.py --report data/logs/surface_build.csv
@@ -163,6 +164,16 @@ history never silently mixes methods. The old pooled-bin pipeline
 (`grid_builder.build_surface_grid` / `interpolate_to_grid`) is still
 reachable with `method="rbf"` but should not feed features or models.
 
+### Design note: why not a joint SSVI fit
+
+A joint eSSVI fit (Gatheral–Jacquier SSVI with per-expiry ρ; θ and ρ per
+expiry plus two shared parameters) was evaluated in October 2026 as a way to
+steady thin chains. On SPY its fit error was 3–4× the per-expiry SVI's at
+every expiry (0.9 vs 0.3 vol pts), and its constrained smile shape moved the
+30d 25Δ risk reversal by about 2 vol points. It traded noise for bias, so it
+was not adopted. The remaining noise (see the feature table's noise floors)
+is quote-level, not model-level.
+
 ### Checking accuracy
 
 ```bash
@@ -212,8 +223,24 @@ ones.
 Vols are decimals (0.15 = 15%). **Nothing is extrapolated.** A feature whose
 tenor falls outside the listed expiries, or whose strike falls outside the
 quotes of the bracketing expiries, is NaN. For example, XLF often lists no
-expiry near 7 days. Butterflies are the noisiest features: they are
-second-order and small, so quote noise is a larger share of them.
+expiry near 7 days.
+
+**Noise floors.** Each feature's daily change mixes real moves with
+measurement noise. Treating the series as a random walk plus independent
+noise, the noise standard deviation is √(−ρ₁·Var(Δ)), where ρ₁ is the lag-1
+autocorrelation of daily changes. Estimated on the live corpus (Feb–Oct 2026),
+in vol points:
+
+| Feature | SPY, QQQ, IWM | AAPL, MSFT, TSLA, GLD | XLF |
+|---|---|---|---|
+| `atm_30d`, `vs_30d` | ~0.5 (2–3% of level) | 0–0.6 | 0.5–1.0 |
+| `rr25_30d` | ~0.3 (5–8% of level) | ~0.3 (15–22% of level) | ~0.4 |
+| `bf25_30d`, `bf25_91d` | 0.02–0.05 | 0.03–0.09 | ~0.15 |
+
+The 30d risk reversal on single names is the one feature where noise is a
+large share of the level. It is quote-level noise at the 25-delta strikes; it
+does not come from the 30-day interpolation (days when the bracketing
+expiries roll are no noisier). Prefer `_d5` changes or smoothing for it.
 
 ---
 
@@ -227,29 +254,27 @@ python scripts/backfill_kaggle.py --list          # inspect the dataset
 python scripts/backfill_kaggle.py --download      # all years
 python scripts/backfill_kaggle.py --download --years 2018 2020 2022
 
-# Build surfaces over the historical store
-python scripts/build_surfaces.py \
-    --options-dir data/historical/options \
-    --surfaces-dir data/historical/surfaces
+# Inputs of the same era: rates (for forwards), prices (realised vol), VIX
+python scripts/backfill_rates.py --start 2009-01-01
+python scripts/backfill_underlying.py -t SPY --start 2009-01-01
+python scripts/backfill_vix.py --start 2009-06-01
+
+# Surfaces (parallel; 2010–2023 takes about 100 minutes on 7 workers), then features
+python scripts/build_surfaces.py --options-dir data/historical/options \
+    --surfaces-dir data/historical/surfaces --report data/logs/surface_build_historical.csv
+python scripts/build_features.py --surfaces-dir data/historical/surfaces \
+    --out data/historical/features/surface_features.parquet
+python scripts/validate_surfaces.py --surfaces-dir data/historical/surfaces -t SPY
 ```
 
 Historical data lands in **`data/historical/`**, deliberately separate from the
 live yfinance corpus. The two differ in source, quote timing, and IV
 convention, so keeping them apart preserves provenance — and stops a
 2010-dated partition from breaking the daily freshness check. Pool them only
-deliberately, and re-run `scripts/backfill_rates.py --start 2009-01-01` first
-so historical forwards use the rates of their own era rather than today's.
+deliberately.
 
-> The historical surfaces on disk predate the per-expiry builder, so the
-> loaders skip them. Rebuild before use (about four hours for 2010–2023), then
-> build their features:
->
-> ```bash
-> python scripts/build_surfaces.py --options-dir data/historical/options \
->     --surfaces-dir data/historical/surfaces
-> python scripts/build_features.py --surfaces-dir data/historical/surfaces \
->     --out data/historical/features/surface_features.parquet
-> ```
+The VIX backfill is written to `data/vix/vix_0000_backfill.parquet`. Daily
+snapshots take precedence over it wherever the two overlap.
 
 ---
 
