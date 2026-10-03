@@ -21,50 +21,20 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from scipy.special import ndtr
 
 logger = logging.getLogger(__name__)
-
-#: Integration grid in forward log-moneyness for the variance-swap integral.
-_K_INTEGRATION = np.linspace(-2.5, 1.5, 4001)
-
-
-def _slice_total_variance(s: dict, k: np.ndarray) -> np.ndarray:
-    from src.surface.slices import SliceFit
-
-    fit = SliceFit(**s)
-    return np.maximum(fit.total_variance_extrapolated(k), 1e-12)
-
-
-def _vs_total_variance(s: dict) -> float:
-    """``σ²_VS·T`` for one expiry: ``2 ∫ OTM(k) e^{-k} dk`` on unit forward."""
-    k = _K_INTEGRATION
-    sw = np.sqrt(_slice_total_variance(s, k))
-    d1 = -k / sw + 0.5 * sw
-    d2 = d1 - sw
-    call = ndtr(d1) - np.exp(k) * ndtr(d2)
-    put = np.exp(k) * ndtr(-d2) - ndtr(-d1)
-    otm = np.where(k >= 0, call, put)
-    return float(2.0 * np.trapezoid(otm * np.exp(-k), k))
 
 
 def variance_swap_vol(slices: list[dict], tenor: float = 30 / 365) -> float:
     """Model-free (VIX-style) vol at *tenor* from a surface's fitted slices.
 
-    Each expiry's fair variance is integrated from its smile; the result is
-    interpolated linearly in total variance between the two expiries that
-    bracket *tenor* — the same construction CBOE uses for VIX.
+    See :meth:`src.surface.slices.ExpirySurface.variance_swap_vol`.
     """
+    from src.surface.slices import ExpirySurface
+
     if len(slices) < 2:
         return float("nan")
-    s = sorted(slices, key=lambda d: d["T"])
-    Ts = np.array([d["T"] for d in s])
-    if not (Ts[0] <= tenor <= Ts[-1]):
-        return float("nan")
-    i = int(np.clip(np.searchsorted(Ts, tenor) - 1, 0, len(Ts) - 2))
-    w1, w2 = _vs_total_variance(s[i]), _vs_total_variance(s[i + 1])
-    x = (tenor - Ts[i]) / (Ts[i + 1] - Ts[i])
-    return float(np.sqrt(((1 - x) * w1 + x * w2) / tenor))
+    return ExpirySurface(slices).variance_swap_vol(tenor)
 
 
 def surface_series(

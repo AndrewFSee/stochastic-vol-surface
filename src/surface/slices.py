@@ -67,6 +67,9 @@ MIN_SPREAD_IV = 0.005
 
 RateFn = Callable[[float], float]
 
+#: Integration grid in forward log-moneyness for variance-swap integrals.
+_K_INTEGRATION = np.linspace(-2.5, 1.5, 4001)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Slice result
@@ -121,6 +124,21 @@ class SliceFit:
         w = np.where(k < lo, w_lo + slope_lo * (k - lo), w)
         w = np.where(k > hi, w_hi + slope_hi * (k - hi), w)
         return w
+
+    def variance_swap_total_variance(self) -> float:
+        """Fair variance-swap total variance ``σ²_VS·T`` for this expiry.
+
+        ``2 ∫ OTM(k)·e^{-k} dk`` with OTM prices normalised to a unit
+        forward, integrated over the (extrapolated) smile.
+        """
+        k = _K_INTEGRATION
+        sw = np.sqrt(np.maximum(self.total_variance_extrapolated(k), 1e-12))
+        d1 = -k / sw + 0.5 * sw
+        d2 = d1 - sw
+        call = ndtr(d1) - np.exp(k) * ndtr(d2)
+        put = np.exp(k) * ndtr(-d2) - ndtr(-d1)
+        otm = np.where(k >= 0, call, put)
+        return float(2.0 * np.trapezoid(otm * np.exp(-k), k))
 
     def _slope(self, k: float) -> float:
         """dw/dk of the SVI slice."""
@@ -508,31 +526,132 @@ def slices_to_grid(
     is True where the cell lies inside the quoted strike range of both
     bracketing expiries.
     """
-    if len(slices) < 1:
-        raise ValueError("no fitted slices")
+    surf = ExpirySurface(slices)
     k_grid = np.asarray(k_grid, dtype=float)
-    Ts = np.array([s.T for s in slices])
-    W = np.array([s.total_variance_extrapolated(k_grid) for s in slices])  # (n_s, n_k)
-    W = np.maximum(W, 1e-10)
-    kmin = np.array([s.k_min for s in slices])
-    kmax = np.array([s.k_max for s in slices])
-
     iv = np.empty((len(k_grid), len(t_grid)))
     observed = np.zeros_like(iv, dtype=bool)
-
     for j, T in enumerate(t_grid):
-        if T <= Ts[0] or T >= Ts[-1]:
-            i = 0 if T <= Ts[0] else len(Ts) - 1
-            w = W[i] * T / Ts[i]
-            lo, hi = kmin[i], kmax[i]
-            exact = np.isclose(T, Ts[i])
-        else:
-            i = int(np.searchsorted(Ts, T)) - 1
-            x = (T - Ts[i]) / (Ts[i + 1] - Ts[i])
-            w = (1 - x) * W[i] + x * W[i + 1]
-            lo, hi = max(kmin[i], kmin[i + 1]), min(kmax[i], kmax[i + 1])
-            exact = True
-        iv[:, j] = np.sqrt(w / T)
-        observed[:, j] = exact & (k_grid >= lo) & (k_grid <= hi)
-
+        iv[:, j] = surf.iv(k_grid, T)
+        observed[:, j] = surf.is_observed(k_grid, T)
     return iv, observed
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Continuous surface over the fitted expiries
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class ExpirySurface:
+    """A continuous ``(k, T)`` surface built directly on the per-expiry fits.
+
+    Same interpolation as :func:`slices_to_grid` — total variance linear in
+    ``T`` between bracketing expiries, flat vol outside the expiry range,
+    tangent-line wings beyond quoted strikes — but queryable at any tenor and
+    strike.  Features use this rather than the stored 25x8 grid, which cannot
+    resolve short tenors (it starts at 1M) or exact delta strikes.
+
+    *slices* may be :class:`SliceFit` objects or the dicts stored in a saved
+    surface's metadata (``VolSurface.slices``).
+    """
+
+    def __init__(self, slices):
+        fits = [s if isinstance(s, SliceFit) else SliceFit(**s) for s in slices]
+        if not fits:
+            raise ValueError("no fitted slices")
+        self.slices: list[SliceFit] = sorted(fits, key=lambda s: s.T)
+        self.Ts = np.array([s.T for s in self.slices])
+
+    @property
+    def t_min(self) -> float:
+        return float(self.Ts[0])
+
+    @property
+    def t_max(self) -> float:
+        return float(self.Ts[-1])
+
+    def brackets(self, T: float) -> bool:
+        """True if *T* lies within the fitted expiry range (no T extrapolation)."""
+        return bool(self.Ts[0] - 1e-12 <= T <= self.Ts[-1] + 1e-12)
+
+    def _bracket(self, T: float) -> tuple[int, int, float]:
+        """Indices of the bracketing slices and the weight on the later one.
+
+        Outside the expiry range both indices are the nearest edge slice.
+        """
+        if T <= self.Ts[0]:
+            return 0, 0, 0.0
+        if T >= self.Ts[-1]:
+            n = len(self.Ts) - 1
+            return n, n, 0.0
+        j = int(np.searchsorted(self.Ts, T))
+        i = j - 1
+        return i, j, float((T - self.Ts[i]) / (self.Ts[j] - self.Ts[i]))
+
+    def total_variance(self, k, T: float) -> np.ndarray:
+        """Total implied variance at log-moneyness *k* and tenor *T*."""
+        k = np.asarray(k, dtype=float)
+        i, j, x = self._bracket(T)
+        if i == j:  # outside the expiry range: hold implied vol flat
+            w = self.slices[i].total_variance_extrapolated(k) * T / self.Ts[i]
+        else:
+            w = ((1 - x) * self.slices[i].total_variance_extrapolated(k)
+                 + x * self.slices[j].total_variance_extrapolated(k))
+        return np.maximum(w, 1e-10)
+
+    def iv(self, k, T: float) -> np.ndarray:
+        """Implied vol at log-moneyness *k* and tenor *T*."""
+        return np.sqrt(self.total_variance(k, T) / T)
+
+    def quoted_range(self, T: float) -> tuple[float, float]:
+        """k-range quoted by *both* bracketing expiries."""
+        i, j, _ = self._bracket(T)
+        a, b = self.slices[i], self.slices[j]
+        return max(a.k_min, b.k_min), min(a.k_max, b.k_max)
+
+    def is_observed(self, k, T: float) -> np.ndarray:
+        """True where ``(k, T)`` is inside quoted strikes of bracketing expiries.
+
+        Outside the expiry range only a tenor that coincides with the edge
+        expiry counts as observed.
+        """
+        k = np.asarray(k, dtype=float)
+        i, j, _ = self._bracket(T)
+        in_t = i != j or bool(np.isclose(T, self.Ts[i]))
+        lo, hi = self.quoted_range(T)
+        return in_t & (k >= lo) & (k <= hi)
+
+    def delta_strike(self, delta: float, T: float) -> float:
+        """Log-moneyness with forward Black delta *delta* at tenor *T*.
+
+        ``delta > 0`` is a call delta (``0.25`` = 25-delta call), ``delta < 0``
+        a put delta.  Uses the smile's own vol at the strike, solved by
+        bracketing — call delta ``N(d1)`` is monotone in k on an
+        arbitrage-free smile, so this cannot oscillate the way a fixed-point
+        iteration on sigma can on a steep skew.
+        """
+        from scipy.optimize import brentq
+
+        target = delta if delta > 0 else 1.0 + delta   # put Δ = call Δ - 1
+
+        def f(k):
+            w = float(self.total_variance(k, T))
+            sw = math.sqrt(w)
+            return float(ndtr(-k / sw + 0.5 * sw)) - target
+
+        lo, hi = -4.0, 3.0
+        if f(lo) * f(hi) > 0:
+            return float("nan")
+        return float(brentq(f, lo, hi, xtol=1e-8))
+
+    def variance_swap_vol(self, T: float) -> float:
+        """Model-free (VIX-style) vol at tenor *T*; NaN unless bracketed.
+
+        Each expiry's fair variance is integrated from its smile, then
+        interpolated linearly in total variance — CBOE's VIX construction.
+        """
+        if not self.brackets(T) or len(self.slices) < 2:
+            return float("nan")
+        i, j, x = self._bracket(T)
+        wi = self.slices[i].variance_swap_total_variance()
+        wj = self.slices[j].variance_swap_total_variance()
+        return float(math.sqrt(((1 - x) * wi + x * wj) / T))

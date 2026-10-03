@@ -134,6 +134,15 @@ def run_collection(cfg: ScraperConfig, as_of: Optional[date] = None) -> ScrapeRe
             logger.warning("Rates collection failed (FRED_API_KEY set?): %s", exc)
             errors.append(f"Rates: {exc}")
 
+    # ── 3b. Underlying prices ─────────────────────────────────────────────
+    if cfg.collect_underlying:
+        try:
+            n = _collect_underlying(cfg)
+            logger.info("Underlying prices: %d rows refreshed", n)
+        except Exception as exc:
+            logger.exception("Underlying price collection failed")
+            errors.append(f"Underlying: {exc}")
+
     # ── 4. Volatility surfaces ────────────────────────────────────────────
     # Runs last so it consumes the chains and rates written above.
     if cfg.build_surfaces and total_rows > 0:
@@ -146,6 +155,25 @@ def run_collection(cfg: ScraperConfig, as_of: Optional[date] = None) -> ScrapeRe
         except Exception as exc:
             logger.exception("Surface build failed")
             errors.append(f"Surfaces: {exc}")
+
+    # ── 5. Feature table ──────────────────────────────────────────────────
+    # Rebuilt in full from the stores, so it always matches the surfaces.
+    if cfg.build_features and total_rows > 0:
+        try:
+            from src.features.table import build_feature_table, save_feature_table
+
+            feats = build_feature_table(
+                cfg.tickers, surfaces_dir=cfg.surfaces_dir,
+                underlying_dir=cfg.underlying_dir, vix_dir=cfg.vix_dir,
+            )
+            if feats.empty:
+                errors.append("Features: no rows built")
+            else:
+                save_feature_table(feats, cfg.features_path)
+                logger.info("Features: %d rows", len(feats))
+        except Exception as exc:
+            logger.exception("Feature build failed")
+            errors.append(f"Features: {exc}")
 
     result = ScrapeResult(
         as_of=as_of,
@@ -228,6 +256,21 @@ def _collect_rates(as_of: date, rates_dir: str) -> dict[str, float]:
     latest = df.iloc[-1]
     return {col: round(float(latest[col]), 6)
             for col in df.columns if pd.notna(latest[col])}
+
+
+def _collect_underlying(cfg: ScraperConfig) -> int:
+    """Refresh the trailing month of daily OHLC into the price history.
+
+    A month rather than a day so that provisional bars from earlier runs
+    (Yahoo's same-day bar often has no close yet) get replaced by final ones.
+    """
+    from src.data.underlying import fetch_underlying, save_underlying_history
+
+    df = fetch_underlying(cfg.tickers, period="1mo")
+    if df.empty:
+        return 0
+    save_underlying_history(df, cfg.underlying_dir)
+    return len(df)
 
 
 def _build_surfaces(as_of: date, cfg: ScraperConfig) -> dict[str, int]:

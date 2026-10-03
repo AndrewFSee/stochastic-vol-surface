@@ -38,17 +38,22 @@ pip install -e ".[dev]"
 cp .env.example .env
 # edit .env with your FRED_API_KEY and OPENAI_API_KEY
 
-# 3. Collect today's data (options + VIX + rates + surfaces)
+# 3. Collect today's data (options + VIX + rates + prices + surfaces + features)
 python scripts/schedule_scraper.py --once
 
-# 4. Backfill the risk-free curve (FRED serves full history)
+# 4. Backfill the risk-free curve and underlying prices (both serve full history)
 python scripts/backfill_rates.py --start 2026-01-01
+python scripts/backfill_underlying.py --start 2024-01-01
 
 # 5. Build the surface corpus from every stored chain
 python scripts/build_surfaces.py --report data/logs/surface_build.csv
 
-# 6. Check corpus health at any time
+# 6. Build the feature table (the main output)
+python scripts/build_features.py
+
+# 7. Check corpus health and surface accuracy at any time
 python scripts/data_health.py
+python scripts/validate_surfaces.py --strict
 
 # 7. Calibrate parametric models
 python scripts/calibrate.py --start 2026-02-19 --end 2026-07-31
@@ -75,6 +80,7 @@ streamlit run src/dashboard/app.py
 | yfinance | `src/data/scraper.py` | Daily options chains (8 tickers) |
 | yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, SKEW, VVIX |
 | FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
+| yfinance | `src/data/underlying.py` | Daily OHLC for the tickers (realised vol) |
 | Kaggle | `src/data/kaggle_loader.py` | Historical SPY IV dataset |
 | Parquet | `src/data/storage.py` | Partitioned storage with dedup |
 | — | `src/data/health.py` | Coverage / freshness / quality reporting |
@@ -88,6 +94,8 @@ data/
 ├── vix/vix_{D}.parquet                          # rolling 5-day snapshots
 │   └── vix_history.parquet                      # consolidated series
 ├── rates/rates_history.parquet                  # merged FRED curve
+├── underlying/prices.parquet                    # daily OHLC, (date, ticker)
+├── features/surface_features.parquet            # one row per (ticker, date)
 └── logs/scrape_runs.jsonl                       # one line per collection run
 ```
 
@@ -99,7 +107,8 @@ function rather than a single snapshot file.
 ### Daily automation
 
 `scripts/schedule_scraper.py --once` runs one full cycle — chains, VIX, rates,
-then surfaces — skipping non-trading days via the NYSE calendar. On Windows it
+underlying prices, surfaces, then the feature table — skipping non-trading
+days via the NYSE calendar. On Windows it
 is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
 
@@ -166,6 +175,46 @@ it with VIX (same definition, computed by CBOE from SPX). It also reports
 daily-change noise for every ticker. A strongly negative lag-1
 autocorrelation of daily changes means jumps that revert the next day, which
 is measurement noise.
+
+---
+
+## Feature Table
+
+`data/features/surface_features.parquet` is the project's main output: one
+point-in-time row per (ticker, trading date), for the dashboard and for
+downstream models. `scripts/build_features.py` rebuilds it in full from the
+surface, price and VIX stores, and the daily run does the same.
+
+```python
+from src.features import load_feature_table
+
+df = load_feature_table(tickers=["SPY", "QQQ"], start="2026-06-01")
+```
+
+**Timing.** Row *t* uses only what was known at about 16:30 ET on *t*: that
+day's option snapshot, the underlying's close and the VIX closes. To predict
+anything over `(t, t+h]`, use row *t*. Rolling statistics are trailing and
+include *t*. A test checks that appending later rows never changes earlier
+ones.
+
+| Group | Columns | Notes |
+|---|---|---|
+| ATM term structure | `atm_{7,14,30,60,91,182,365}d` | Forward-ATM implied vol at constant maturity |
+| Smile (30d, 91d) | `iv_{p10,p25,c25,c10}_*`, `rr25_*`, `bf25_*`, `rr10_*`, `bf10_*`, `atm_skew_*`, `atm_curv_*` | Exact forward-delta strikes; `rr` = call − put |
+| Variance swap | `vs_30d`, `vs_91d` | Model-free, VIX's definition |
+| Term spreads | `ts_7_30`, `ts_30_91`, `ts_30_365` | Longer minus shorter ATM vol |
+| Carry | `fwd_carry_1y` | ln(F/S)/T: rate − dividend − borrow. Level only; daily changes are mostly noise |
+| Realised | `ret_{1,5,21}d`, `rv_cc_{10,21,63}d`, `rv_yz_21d` | Zero-mean close-to-close and Yang-Zhang |
+| Premia | `vrp_30d`, `vrp_var_30d` | ATM − RV in vol; VS² − RV² in variance |
+| Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vvix`, `mkt_skew` | Same for every ticker |
+| Dynamics | `<col>_d1`, `_d5`, `_z63`, `_pct252` | For the key columns; laid on the NYSE calendar, so a missing day is a gap, not a 2-day change |
+| Quality | `n_expiries`, `nearest_expiry_days`, `fit_rmse`, `parity_fraction` | Use to down-weight weak days |
+
+Vols are decimals (0.15 = 15%). **Nothing is extrapolated.** A feature whose
+tenor falls outside the listed expiries, or whose strike falls outside the
+quotes of the bracketing expiries, is NaN. For example, XLF often lists no
+expiry near 7 days. Butterflies are the noisiest features: they are
+second-order and small, so quote noise is a larger share of them.
 
 ---
 

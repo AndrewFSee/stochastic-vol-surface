@@ -167,6 +167,16 @@ class ScraperConfig(BaseModel):
         default=True,
         description="Build vol surfaces from the chains collected in this run",
     )
+    underlying_dir: str = Field(default="data/underlying")
+    collect_underlying: bool = Field(
+        default=True,
+        description="Refresh daily OHLC for the tickers (realised-vol inputs)",
+    )
+    features_path: str = Field(default="data/features/surface_features.parquet")
+    build_features: bool = Field(
+        default=True,
+        description="Rebuild the feature table after the surfaces",
+    )
 
 
 class ScrapeResult(BaseModel):

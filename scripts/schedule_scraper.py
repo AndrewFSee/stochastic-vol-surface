@@ -62,8 +62,13 @@ _yaml_cfg = _load_yaml_scraper_cfg()
               help="Collect FRED rates (needs FRED_API_KEY)")
 @click.option("--surfaces/--no-surfaces", default=True, show_default=True,
               help="Build vol surfaces from the chains collected in this run")
+@click.option("--prices/--no-prices", default=True, show_default=True,
+              help="Refresh daily OHLC for the tickers (realised-vol inputs)")
+@click.option("--features/--no-features", default=True, show_default=True,
+              help="Rebuild the feature table after the surfaces")
 @click.option("--once", is_flag=True, help="Run once immediately then exit")
-def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces, once):
+def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
+         prices, features, once):
     """Launch the daily data-collection scheduler (options + VIX + rates + surfaces)."""
     try:
         from dotenv import load_dotenv
@@ -83,6 +88,8 @@ def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces, onc
         collect_vix=vix,
         collect_rates=rates,
         build_surfaces=surfaces,
+        collect_underlying=prices,
+        build_features=features,
         inter_ticker_delay=_yaml_cfg.get("inter_ticker_delay", 1.5),
     )
 
@@ -103,7 +110,9 @@ def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces, onc
         f"Scheduler started — collecting {cfg.tickers} "
         f"at {schedule_time} {timezone} Mon–Fri.\n"
         f"  VIX: {'ON' if vix else 'OFF'}  |  Rates: {'ON' if rates else 'OFF'}"
-        f"  |  Surfaces: {'ON' if surfaces else 'OFF'}\n"
+        f"  |  Surfaces: {'ON' if surfaces else 'OFF'}"
+        f"  |  Prices: {'ON' if prices else 'OFF'}"
+        f"  |  Features: {'ON' if features else 'OFF'}\n"
         f"  Ctrl+C to stop."
     )
     sched.start()
