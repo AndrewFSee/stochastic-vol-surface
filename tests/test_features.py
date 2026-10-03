@@ -11,24 +11,10 @@ import pytest
 from src.features import realized as R
 from src.features.surface_features import TENORS_DAYS, surface_features
 from src.surface.slices import ExpirySurface, fit_slices
-from tests.synthetic_chains import make_chain, smile_iv
+from tests.synthetic_chains import gbm_prices as _gbm_prices, make_chain, smile_iv
 
 
 # ── Realised vol ─────────────────────────────────────────────────────────
-
-
-def _gbm_prices(sigma=0.2, n=600, seed=0, start="2025-01-02"):
-    """Daily OHLC from a GBM sampled intraday, so OHLC estimators have signal."""
-    rng = np.random.default_rng(seed)
-    steps = 390  # one per minute; coarser sampling understates high-low ranges
-    dt = 1 / (252 * steps)
-    log_p = np.cumsum(rng.normal(-0.5 * sigma ** 2 * dt, sigma * np.sqrt(dt), n * steps))
-    path = 100 * np.exp(log_p).reshape(n, steps)
-    idx = pd.bdate_range(start, periods=n, name="date")
-    return pd.DataFrame({
-        "open": path[:, 0], "high": path.max(axis=1), "low": path.min(axis=1),
-        "close": path[:, -1], "adj_close": path[:, -1], "volume": 1e6,
-    }, index=idx)
 
 
 def test_close_to_close_vol_is_zero_mean_rms():
@@ -219,38 +205,6 @@ def test_underlying_store_is_idempotent(tmp_path):
 
 
 # ── End to end ───────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def stores(tmp_path):
-    """Options, surfaces, prices and VIX for one ticker over five days."""
-    from src.data.underlying import save_underlying_history
-    from src.surface.batch import build_corpus
-
-    dates = list(pd.bdate_range("2026-03-02", periods=5).date)
-    opt = tmp_path / "options"
-    for i, d in enumerate(dates):
-        part = opt / "ticker=TEST" / f"date={d.isoformat()}"
-        part.mkdir(parents=True)
-        make_chain(as_of=d, atm=0.20 + 0.01 * i,
-                   tenors=(0.06, 0.12, 0.25, 0.5, 1.0)).to_parquet(
-            part / "chain.parquet", index=False)
-    build_corpus(options_dir=str(opt), surfaces_dir=str(tmp_path / "surfaces"),
-                 progress=False)
-
-    prices = _gbm_prices(n=80, start="2025-11-03").loc[:pd.Timestamp(dates[-1])]
-    prices["ticker"] = "TEST"
-    save_underlying_history(prices.reset_index().set_index(["date", "ticker"]),
-                            str(tmp_path / "underlying"))
-
-    vix_dir = tmp_path / "vix"
-    vix_dir.mkdir()
-    pd.DataFrame({"VIX": [15.0 + i for i in range(5)]},
-                 index=pd.DatetimeIndex(pd.to_datetime(dates), name="date")).to_parquet(
-        vix_dir / f"vix_{dates[-1].isoformat()}.parquet")
-    return {"surfaces_dir": str(tmp_path / "surfaces"),
-            "underlying_dir": str(tmp_path / "underlying"),
-            "vix_dir": str(vix_dir), "dates": dates}
 
 
 def test_build_feature_table_end_to_end(stores, tmp_path):

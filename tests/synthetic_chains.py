@@ -66,3 +66,17 @@ def make_chain(
                     "underlying_price": spot,
                 })
     return pd.DataFrame(rows)
+
+
+def gbm_prices(sigma=0.2, n=600, seed=0, start="2025-01-02"):
+    """Daily OHLC from a GBM sampled intraday, so OHLC estimators have signal."""
+    rng = np.random.default_rng(seed)
+    steps = 390  # one per minute; coarser sampling understates high-low ranges
+    dt = 1 / (252 * steps)
+    log_p = np.cumsum(rng.normal(-0.5 * sigma ** 2 * dt, sigma * np.sqrt(dt), n * steps))
+    path = 100 * np.exp(log_p).reshape(n, steps)
+    idx = pd.bdate_range(start, periods=n, name="date")
+    return pd.DataFrame({
+        "open": path[:, 0], "high": path.max(axis=1), "low": path.min(axis=1),
+        "close": path[:, -1], "adj_close": path[:, -1], "volume": 1e6,
+    }, index=idx)

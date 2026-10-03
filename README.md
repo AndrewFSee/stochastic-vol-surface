@@ -323,10 +323,23 @@ so historical forwards use the rates of their own era rather than today's.
 streamlit run src/dashboard/app.py
 ```
 
-Reads the built surface corpus and the consolidated VIX history: pick a ticker
-and as-of date to inspect the 3-D surface, a skew slice, the ATM term
-structure, ATM vol through time, and the current vol regime. If no surfaces
-have been built it falls back to a synthetic surface, so the app always runs.
+The dashboard reads the feature table and the per-expiry fits stored with
+each surface. It computes nothing from live market data. One filter row
+(ticker, as-of date, history window, comparison period) scopes every view:
+
+| Tab | Shows |
+|---|---|
+| Overview | Every ticker on one row: 30d ATM level, 1-day change, 1-year percentile, 3-month sparkline, variance swap, realised vol, VRP, risk reversal, butterfly, term spread, fit error |
+| Smile | Fitted SVI smiles drawn over the market quotes they came from (mid ± half spread), with the 25Δ strikes marked |
+| Term structure | ATM vol by days to expiry: as-of date vs 1 week and 1 month earlier, with the listed expiries |
+| Surface | Implied vol on a tenor × delta grid, its change over the comparison period, and an optional 3D view |
+| History | Implied vs realised vol, VRP, 25Δ risk reversal and term spread over time |
+| Quality | SPY's 30d variance swap vs VIX (the accuracy check), plus fit error and expiry count per ticker |
+
+Every chart has a "Show data" table. Light and dark mode use separately
+validated palette steps. Cells outside the quoted region are blank, never
+extrapolated. Set `VSS_DATA_DIR` to point the app at another store; it
+defaults to `data`.
 
 ---
 
