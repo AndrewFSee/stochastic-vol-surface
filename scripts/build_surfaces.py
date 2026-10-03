@@ -16,6 +16,7 @@ Usage:
 """
 
 import logging
+import os
 import sys
 
 import click
@@ -40,9 +41,11 @@ for _noisy in ("src.surface.slices", "src.surface.surface",
 @click.option("--start", default=None, help="Start date YYYY-MM-DD")
 @click.option("--end", default=None, help="End date YYYY-MM-DD")
 @click.option("--overwrite", is_flag=True, help="Rebuild existing surfaces")
+@click.option("--workers", "-j", default=max(1, (os.cpu_count() or 2) - 1), show_default=True,
+              help="Parallel build processes")
 @click.option("--report", default=None,
               help="Write the per-surface QC report to this CSV path")
-def main(tickers, options_dir, surfaces_dir, start, end, overwrite, report):
+def main(tickers, options_dir, surfaces_dir, start, end, overwrite, workers, report):
     """Build volatility surfaces for every stored options chain."""
     from src.surface.batch import build_corpus
 
@@ -51,6 +54,7 @@ def main(tickers, options_dir, surfaces_dir, start, end, overwrite, report):
         options_dir=options_dir,
         surfaces_dir=surfaces_dir,
         overwrite=overwrite,
+        workers=workers,
         start=start,
         end=end,
     )

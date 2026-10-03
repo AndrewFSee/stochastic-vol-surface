@@ -387,3 +387,19 @@ def test_rejected_rebuild_discards_superseded_surface(tmp_path):
                       surfaces_dir=store["surfaces_dir"])
     assert res.status == "rejected"
     assert not stale.exists()
+
+
+def test_parallel_build_matches_serial(store, tmp_path):
+    """workers > 1 must produce the same surfaces, in the same order."""
+    from src.surface.surface import VolSurface
+
+    serial = B.build_corpus(options_dir=store["options_dir"],
+                            surfaces_dir=str(tmp_path / "serial"), progress=False)
+    parallel = B.build_corpus(options_dir=store["options_dir"],
+                              surfaces_dir=str(tmp_path / "parallel"), progress=False,
+                              workers=2)
+    assert [(r.ticker, r.as_of, r.status) for r in parallel.results] == \
+           [(r.ticker, r.as_of, r.status) for r in serial.results]
+    for a, b in zip(serial.results, parallel.results):
+        np.testing.assert_allclose(VolSurface.load(a.path).iv_grid,
+                                   VolSurface.load(b.path).iv_grid)
