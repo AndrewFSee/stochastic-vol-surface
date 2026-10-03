@@ -259,7 +259,7 @@ python scripts/backfill_rates.py --start 2009-01-01
 python scripts/backfill_underlying.py -t SPY --start 2009-01-01
 python scripts/backfill_vix.py --start 2009-06-01
 
-# Surfaces (parallel; 2010–2023 takes about 100 minutes on 7 workers), then features
+# Surfaces (parallel; 2010–2023 takes about 45 minutes on 7 workers), then features
 python scripts/build_surfaces.py --options-dir data/historical/options \
     --surfaces-dir data/historical/surfaces --report data/logs/surface_build_historical.csv
 python scripts/build_features.py --surfaces-dir data/historical/surfaces \
@@ -275,6 +275,19 @@ deliberately.
 
 The VIX backfill is written to `data/vix/vix_0000_backfill.parquet`. Daily
 snapshots take precedence over it wherever the two overlap.
+
+Rebuilt in October 2026 with the per-expiry builder, the 2010–2023 corpus
+(3,508 days) checks out against VIX about as well as the live one: SPY's 30d
+variance swap has 0.969 daily-change correlation with VIX and a 0.42-pt mean
+absolute difference. On 2020-03-16 it read 82.1 against VIX's 82.7. Median fit
+error is 0.19 vol pts.
+
+To browse the history in the dashboard, point it at the historical store:
+
+```bash
+VSS_DATA_DIR=data/historical python -m streamlit run src/dashboard/app.py
+# PowerShell: $env:VSS_DATA_DIR="data/historical"; python -m streamlit run src/dashboard/app.py
+```
 
 ---
 
