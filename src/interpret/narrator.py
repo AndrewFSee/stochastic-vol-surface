@@ -126,7 +126,26 @@ def _client():
             "file (create a key at console.anthropic.com), then reload the dashboard.")
     import anthropic
 
-    return anthropic.Anthropic()
+    # Keys not scoped to a workspace must name one on every request.  The SDK
+    # keeps a client-level anthropic-workspace-id header on each call.
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+    return anthropic.Anthropic(default_headers=headers)
+
+
+def _explain(exc: Exception) -> Exception:
+    """Turn account-setup API errors into instructions; pass others through."""
+    msg = str(exc)
+    if "anthropic-workspace-id" in msg or "not scoped to a workspace" in msg:
+        return MissingCredentials(
+            "This API key isn't tied to a workspace, so requests must name one. Either add "
+            "ANTHROPIC_WORKSPACE_ID=wrkspc_... to .env (Console → Settings → Workspaces), or "
+            "create a key inside a workspace and use that instead. Then reload the dashboard.")
+    if "credit balance is too low" in msg:
+        return MissingCredentials(
+            "The Anthropic account has no API credit. Add credit under Plans & Billing at "
+            "console.anthropic.com, then try again.")
+    return exc
 
 
 def interpret(
@@ -148,18 +167,21 @@ def interpret(
     client = client or _client()
     user = ("Snapshot (JSON):\n\n"
             + json.dumps(snapshot, indent=1, sort_keys=True, ensure_ascii=False))
-    response = client.beta.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        output_config={"effort": EFFORT},
-        # Re-run a classifier-declined request on Anthropic's recommended
-        # fallback model, server-side, instead of returning the refusal.
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        cache_control={"type": "ephemeral"},
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user}],
-    )
+    try:
+        response = client.beta.messages.create(
+            model=MODEL,
+            max_tokens=16000,
+            output_config={"effort": EFFORT},
+            # Re-run a classifier-declined request on Anthropic's recommended
+            # fallback model, server-side, instead of returning the refusal.
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            cache_control={"type": "ephemeral"},
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user}],
+        )
+    except Exception as exc:
+        raise _explain(exc) from exc
     if response.stop_reason == "refusal":
         category = getattr(getattr(response, "stop_details", None), "category", None)
         raise RuntimeError(f"Claude declined to interpret this snapshot (category: {category}).")
