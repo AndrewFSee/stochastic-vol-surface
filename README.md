@@ -128,11 +128,44 @@ dates, k_grid, t_grid, grids = load_surface_history("SPY")
 
 ## Surface Construction
 
-1. **IV Inversion** (`src/surface/implied_vol.py`) – Brent's method on Black-Scholes
-2. **Grid Builder** (`src/surface/grid_builder.py`) – raw chain → log-moneyness × tenor grid
-3. **Interpolation** (`src/surface/interpolation.py`) – SVI per slice, cubic spline across tenors, RBF for 2D
-4. **Filters** (`src/surface/filters.py`) – butterfly (convexity) + calendar (monotonicity) arbitrage removal
-5. **VolSurface** (`src/surface/surface.py`) – `RegularGridInterpolator`-backed query object
+Surfaces are built **one expiry at a time** (`src/surface/slices.py`, builder
+`expiry-svi/1`):
+
+1. **Clean quotes** – two-sided markets only, bounded relative spread.
+2. **Implied forward** – from put-call parity near the money, per expiry.
+   This carries dividends and borrow; `S·e^{rT}` is ~0.9% too high for SPY at
+   two years and ~2% for XLF.
+3. **OTM Black-76 IVs** – inverted from bid/ask mids (vectorised solver in
+   `src/surface/implied_vol.py`); puts below the forward, calls above. Yahoo's
+   own `impliedVolatility` is not used when prices are available.
+4. **SVI per expiry** – quasi-explicit fit, weighted by bid-ask spread in vol
+   terms, constrained to positive variance and Lee's wing bound, with one
+   round of outlier rejection.
+5. **Across tenors** – total variance linear in T between the two bracketing
+   expiries (VIX's constant-maturity construction), then a calendar
+   monotonicity clean-up (`src/surface/filters.py`).
+6. **VolSurface** (`src/surface/surface.py`) – grid plus an `observed` mask
+   (False where a cell is extrapolated beyond quoted strikes or expiries) and
+   the per-expiry fits (forward, SVI params, fit RMSE) in the file metadata.
+
+Each saved surface records its builder. `build_surfaces.py` rebuilds
+surfaces from an older builder instead of skipping them, and
+`load_surface_history` loads only the current builder by default, so a
+history never silently mixes methods. The old pooled-bin pipeline
+(`grid_builder.build_surface_grid` / `interpolate_to_grid`) is still
+reachable with `method="rbf"` but should not feed features or models.
+
+### Checking accuracy
+
+```bash
+python scripts/validate_surfaces.py --strict
+```
+
+Rebuilds SPY's 30-day variance-swap vol from the fitted smiles and compares
+it with VIX (same definition, computed by CBOE from SPX). It also reports
+daily-change noise for every ticker. A strongly negative lag-1
+autocorrelation of daily changes means jumps that revert the next day, which
+is measurement noise.
 
 ---
 

@@ -222,3 +222,131 @@ def implied_vol_fast(
 
     # Fall back to Brent's method
     return implied_vol(price, S, K, T, r, option_type, tol=tol)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Vectorised Black-76 (forward-based) pricing and inversion
+# ────────────────────────────────────────────────────────────────────────────
+#
+# Quoting against the forward rather than spot means dividends and borrow are
+# carried by F itself (inferred from put-call parity), instead of being
+# silently folded into the implied vol.
+
+_SQRT_2PI = math.sqrt(2.0 * math.pi)
+
+
+def black_price(
+    F: np.ndarray,
+    K: np.ndarray,
+    T: np.ndarray,
+    sigma: np.ndarray,
+    discount: np.ndarray,
+    is_call: np.ndarray,
+) -> np.ndarray:
+    """Black-76 price of European options on a forward *F*.
+
+    All arguments broadcast; *discount* is the discount factor ``e^{-rT}``.
+    """
+    from scipy.special import ndtr
+
+    F, K, T, sigma, discount = np.broadcast_arrays(
+        *(np.asarray(x, dtype=float) for x in (F, K, T, sigma, discount))
+    )
+    is_call = np.broadcast_to(np.asarray(is_call, dtype=bool), F.shape)
+
+    s = sigma * np.sqrt(T)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d1 = (np.log(F / K) + 0.5 * s ** 2) / s
+    d2 = d1 - s
+    call = discount * (F * ndtr(d1) - K * ndtr(d2))
+    put = discount * (K * ndtr(-d2) - F * ndtr(-d1))
+    return np.where(is_call, call, put)
+
+
+def black_vega(
+    F: np.ndarray,
+    K: np.ndarray,
+    T: np.ndarray,
+    sigma: np.ndarray,
+    discount: np.ndarray,
+) -> np.ndarray:
+    """Black-76 vega, dPrice/dSigma (identical for calls and puts)."""
+    F, K, T, sigma, discount = np.broadcast_arrays(
+        *(np.asarray(x, dtype=float) for x in (F, K, T, sigma, discount))
+    )
+    sqrtT = np.sqrt(T)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d1 = (np.log(F / K) + 0.5 * sigma ** 2 * T) / (sigma * sqrtT)
+    return discount * F * np.exp(-0.5 * d1 ** 2) / _SQRT_2PI * sqrtT
+
+
+def black_implied_vol(
+    price: np.ndarray,
+    F: np.ndarray,
+    K: np.ndarray,
+    T: np.ndarray,
+    discount: np.ndarray,
+    is_call: np.ndarray,
+    *,
+    sigma_lo: float = 1e-4,
+    sigma_hi: float = 5.0,
+    tol: float = 1e-10,
+    max_iter: int = 100,
+) -> np.ndarray:
+    """Vectorised Black-76 implied vol: safeguarded Newton inside a bracket.
+
+    Each element keeps a ``[lo, hi]`` bracket that shrinks every iteration
+    (price is monotone in sigma), and takes a Newton step only when that step
+    stays inside the bracket — otherwise it bisects.  This converges in a
+    handful of iterations near the money and still terminates in the wings
+    where vega vanishes and plain Newton diverges.
+
+    Returns NaN where the price violates the no-arbitrage bounds or the
+    implied vol would fall outside ``[sigma_lo, sigma_hi]``.
+    """
+    price, F, K, T, discount = np.broadcast_arrays(
+        *(np.asarray(x, dtype=float) for x in (price, F, K, T, discount))
+    )
+    is_call = np.broadcast_to(np.asarray(is_call, dtype=bool), price.shape)
+
+    intrinsic = discount * np.where(is_call, np.maximum(F - K, 0.0),
+                                    np.maximum(K - F, 0.0))
+    upper = discount * np.where(is_call, F, K)
+    valid = (
+        np.isfinite(price) & (price > intrinsic) & (price < upper)
+        & (T > 0) & (F > 0) & (K > 0)
+    )
+
+    lo = np.full(price.shape, sigma_lo)
+    hi = np.full(price.shape, sigma_hi)
+    # Brenner-Subrahmanyam on the time value — a decent ATM starting point.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sig = _SQRT_2PI * (price - intrinsic) / (discount * F * np.sqrt(T))
+    sig = np.clip(np.nan_to_num(sig, nan=0.2), 0.05, 2.0)
+
+    # Prices outside what [sigma_lo, sigma_hi] can produce have no solution.
+    p_lo = black_price(F, K, T, lo, discount, is_call)
+    p_hi = black_price(F, K, T, hi, discount, is_call)
+    valid &= (price >= p_lo) & (price <= p_hi)
+
+    active = valid.copy()
+    for _ in range(max_iter):
+        if not active.any():
+            break
+        p = black_price(F, K, T, sig, discount, is_call)
+        diff = p - price
+        done = np.abs(diff) < tol * np.maximum(price, 1e-12)
+        active &= ~done
+
+        hi = np.where(active & (diff > 0), sig, hi)
+        lo = np.where(active & (diff <= 0), sig, lo)
+
+        vega = black_vega(F, K, T, sig, discount)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            newton = sig - diff / vega
+        use_newton = np.isfinite(newton) & (newton > lo) & (newton < hi)
+        step = np.where(use_newton, newton, 0.5 * (lo + hi))
+        sig = np.where(active, step, sig)
+        active &= (hi - lo) > 1e-12
+
+    return np.where(valid, sig, np.nan)

@@ -13,28 +13,10 @@ from src.surface import batch as B
 
 
 def _synthetic_chain(ticker="TEST", as_of=date(2026, 1, 6), spot=100.0):
-    """Build a small but well-formed options chain with a realistic smile."""
-    rows = []
-    for T in (0.0833, 0.25, 0.5, 1.0, 2.0):
-        expiry = pd.Timestamp(as_of) + pd.Timedelta(days=int(T * 365))
-        for k in np.linspace(-0.35, 0.18, 22):
-            strike = spot * np.exp(k)
-            # Convex smile in log-moneyness, mild term structure.
-            iv = 0.20 + 0.35 * k**2 - 0.05 * k + 0.01 * T
-            for opt in ("call", "put"):
-                rows.append({
-                    "ticker": ticker,
-                    "as_of": pd.Timestamp(as_of),
-                    "expiration": expiry,
-                    "strike": float(strike),
-                    "option_type": opt,
-                    "bid": 1.0, "ask": 1.1, "mid": 1.05, "last_price": 1.05,
-                    "volume": 100.0, "open_interest": 500.0,
-                    "implied_volatility_market": float(iv),
-                    "T": float(T),
-                    "underlying_price": spot,
-                })
-    return pd.DataFrame(rows)
+    """A small, internally consistent chain (prices match the smile)."""
+    from tests.synthetic_chains import make_chain
+
+    return make_chain(ticker=ticker, as_of=as_of, spot=spot)
 
 
 @pytest.fixture
@@ -304,3 +286,104 @@ def test_roundtrip_grid_matches_built_surface(store):
     reloaded = VolSurface.load(res.path)
     _, _, _, grids = B.load_surface_history("TEST", store["surfaces_dir"])
     np.testing.assert_allclose(grids[0], reloaded.iv_grid, rtol=1e-9)
+
+
+# ── Builder versioning ───────────────────────────────────────────────────
+
+
+def _write_legacy_surface(store, d):
+    """Write a surface the way the pre-versioning pooled-bin builder did."""
+    from src.surface.surface import VolSurface
+
+    vs = VolSurface(ticker="TEST", as_of=d, k_grid=np.linspace(-0.4, 0.2, 25),
+                    t_grid=np.array([0.0833, 0.1667, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]),
+                    iv_grid=np.full((25, 8), 0.2), spot=100.0)
+    path = B.surface_path("TEST", d, store["surfaces_dir"])
+    vs.save(path)
+    # Strip the builder key, as files written before it existed lack it.
+    import json
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path)
+    meta = json.loads(table.schema.metadata[b"vol_surface"])
+    meta.pop("builder")
+    pq.write_table(table.replace_schema_metadata(
+        {**table.schema.metadata, b"vol_surface": json.dumps(meta).encode()}), path)
+    return path
+
+
+def test_stored_builder_reads_version(store):
+    res = B.build_one("TEST", store["dates"][0], **_dirs(store))
+    assert B.stored_builder(res.path) == B.BUILDER_VERSION
+
+
+def test_stored_builder_defaults_to_legacy(store):
+    path = _write_legacy_surface(store, store["dates"][0])
+    assert B.stored_builder(path) == "legacy-svi"
+
+
+def test_legacy_surface_is_rebuilt_not_skipped(store):
+    """A corpus must not silently mix construction methods."""
+    _write_legacy_surface(store, store["dates"][0])
+    res = B.build_one("TEST", store["dates"][0], **_dirs(store))
+    assert res.status == "built"
+    assert B.stored_builder(res.path) == B.BUILDER_VERSION
+
+
+def test_load_surface_history_skips_other_builders(store):
+    B.build_corpus(options_dir=store["options_dir"],
+                   surfaces_dir=store["surfaces_dir"], progress=False)
+    _write_legacy_surface(store, store["dates"][1])
+
+    dates, _, _, _ = B.load_surface_history("TEST", store["surfaces_dir"])
+    assert store["dates"][1] not in dates and len(dates) == 2
+
+    all_dates, _, _, _ = B.load_surface_history("TEST", store["surfaces_dir"],
+                                                builder=None)
+    assert len(all_dates) == 3
+
+
+def test_build_result_reports_fit_quality(store):
+    res = B.build_one("TEST", store["dates"][0], **_dirs(store))
+    assert res.n_slices == 5
+    assert res.parity_fraction == 1.0
+    assert res.fit_rmse < 0.005          # synthetic smile: well under 0.5 vol pt
+    assert 0.0 < res.observed_fraction <= 1.0
+
+
+def test_too_few_expiries_is_rejected(tmp_path):
+    """A partial scrape with only a couple of expiries must not be trusted."""
+    from tests.synthetic_chains import make_chain
+
+    d = date(2026, 1, 6)
+    part = tmp_path / "options" / "ticker=TEST" / f"date={d.isoformat()}"
+    part.mkdir(parents=True)
+    make_chain(tenors=(0.12, 0.55, 1.0)).to_parquet(part / "chain.parquet", index=False)
+    res = B.build_one("TEST", d, options_dir=str(tmp_path / "options"),
+                      surfaces_dir=str(tmp_path / "surfaces"))
+    assert res.status == "rejected"
+    assert "expiries" in res.message
+
+
+def test_load_surfaces_skips_other_builders(store):
+    B.build_corpus(options_dir=store["options_dir"],
+                   surfaces_dir=store["surfaces_dir"], progress=False)
+    _write_legacy_surface(store, store["dates"][1])
+    assert store["dates"][1] not in B.load_surfaces("TEST", store["surfaces_dir"])
+    assert len(B.load_surfaces("TEST", store["surfaces_dir"], builder=None)) == 3
+
+
+def test_rejected_rebuild_discards_superseded_surface(tmp_path):
+    from tests.synthetic_chains import make_chain
+
+    d = date(2026, 1, 6)
+    part = tmp_path / "options" / "ticker=TEST" / f"date={d.isoformat()}"
+    part.mkdir(parents=True)
+    make_chain(tenors=(0.12, 0.55, 1.0)).to_parquet(part / "chain.parquet", index=False)
+    store = {"surfaces_dir": str(tmp_path / "surfaces")}
+    stale = _write_legacy_surface(store, d)
+
+    res = B.build_one("TEST", d, options_dir=str(tmp_path / "options"),
+                      surfaces_dir=store["surfaces_dir"])
+    assert res.status == "rejected"
+    assert not stale.exists()

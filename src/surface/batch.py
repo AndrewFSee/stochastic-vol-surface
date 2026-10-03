@@ -37,6 +37,8 @@ from typing import Iterable, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from src.surface.slices import BUILDER_VERSION
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPTIONS_DIR = "data/options"
@@ -50,6 +52,11 @@ MAX_PLAUSIBLE_IV = 3.00
 
 # Reference tenor used to pick the discount rate for a snapshot.
 RATE_REFERENCE_TENOR = 0.25
+
+# Fewer fitted expiries than this means a partial scrape: grid tenors end up
+# interpolated across gaps of several months (one XLF day had only a 43-day
+# and a 197-day expiry), so the surface is rejected rather than trusted.
+MIN_SLICES = 4
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -74,6 +81,10 @@ class SurfaceBuildResult:
     iv_min: float = float("nan")
     iv_max: float = float("nan")
     nan_fraction: float = float("nan")
+    n_slices: int = 0
+    fit_rmse: float = float("nan")          # median per-expiry IV RMSE
+    observed_fraction: float = float("nan")  # grid cells inside quoted strikes
+    parity_fraction: float = float("nan")    # expiries with a parity forward
     message: str = ""
 
     def as_row(self) -> dict:
@@ -91,6 +102,10 @@ class SurfaceBuildResult:
             "iv_min": self.iv_min,
             "iv_max": self.iv_max,
             "nan_fraction": self.nan_fraction,
+            "n_slices": self.n_slices,
+            "fit_rmse": self.fit_rmse,
+            "observed_fraction": self.observed_fraction,
+            "parity_fraction": self.parity_fraction,
             "message": self.message,
         }
 
@@ -144,6 +159,36 @@ def surface_path(
     """Return the canonical output path for one surface."""
     dt = pd.Timestamp(as_of).strftime("%Y-%m-%d")
     return Path(surfaces_dir) / f"ticker={ticker}" / f"date={dt}" / "surface.parquet"
+
+
+def stored_builder(path: Path) -> Optional[str]:
+    """Builder version recorded in a saved surface (schema metadata only).
+
+    Surfaces written before the builder was recorded return ``"legacy-svi"``;
+    an unreadable file returns ``None``.
+    """
+    import json
+
+    import pyarrow.parquet as pq
+
+    try:
+        meta = pq.read_schema(path).metadata or {}
+        return json.loads(meta.get(b"vol_surface", b"{}")).get("builder", "legacy-svi")
+    except Exception:
+        return None
+
+
+def _discard_superseded(path: Path) -> None:
+    """Remove an existing surface whose rebuild was just rejected or failed.
+
+    Reaching a rebuild means the old file was stale (older builder) or an
+    overwrite was requested.  If the current builder cannot produce an
+    acceptable surface from the same chain, keeping the old file would leave
+    a surface on disk that the current pipeline does not stand behind.
+    """
+    if path.exists():
+        logger.warning("Removing superseded surface %s", path)
+        path.unlink()
 
 
 def available_tickers(options_dir: str = DEFAULT_OPTIONS_DIR) -> list[str]:
@@ -245,7 +290,11 @@ def build_one(
     from src.surface.surface import VolSurface
 
     out_path = surface_path(ticker, as_of, surfaces_dir)
-    if out_path.exists() and not overwrite:
+    # A surface from a different construction method is stale, not done:
+    # skipping it would leave a corpus that silently mixes builders.
+    if out_path.exists() and not overwrite and (
+        method != "svi" or stored_builder(out_path) == BUILDER_VERSION
+    ):
         return SurfaceBuildResult(
             ticker=ticker, as_of=as_of, status="skipped", path=out_path,
             message="already exists",
@@ -276,37 +325,55 @@ def build_one(
     # Median guards against the occasional mid-scrape price change.
     spot = float(spot_series.median())
 
-    # ── Discount rate from the real curve ─────────────────────────────────
+    # ── Discount rates from the real curve ────────────────────────────────
+    # Each expiry is discounted at the curve rate for its own tenor; the 3M
+    # point is recorded on the surface as the snapshot's reference rate.
     try:
         from src.data.rates import get_rate_for_tenor
 
         r = get_rate_for_tenor(as_of, RATE_REFERENCE_TENOR, history=rates_history)
+
+        def rate_fn(T: float) -> float:
+            return get_rate_for_tenor(as_of, T, history=rates_history)
     except Exception as exc:
         logger.debug("Rate lookup failed for %s %s: %s", ticker, as_of, exc)
         r = fallback_rate
+        rate_fn = None
 
     # ── Build ─────────────────────────────────────────────────────────────
     try:
         vs = VolSurface.from_chain(
-            chain, ticker=ticker, as_of=as_of, spot=spot, r=r, method=method,
+            chain, ticker=ticker, as_of=as_of, spot=spot, r=r, rate_fn=rate_fn,
+            method=method,
         )
     except Exception as exc:
+        _discard_superseded(out_path)
         return SurfaceBuildResult(
             ticker=ticker, as_of=as_of, status="failed", n_chain_rows=len(chain),
             spot=spot, r=r, message=f"{type(exc).__name__}: {exc}",
         )
 
     ok, msg, stats = score_grid(vs.iv_grid)
+    if ok and method == "svi" and len(vs.slices) < MIN_SLICES:
+        ok, msg = False, f"only {len(vs.slices)} expiries fitted (need {MIN_SLICES})"
 
     result = SurfaceBuildResult(
         ticker=ticker, as_of=as_of, status="built" if ok else "rejected",
         n_chain_rows=len(chain), spot=spot, r=r,
         nan_fraction=stats["nan_fraction"],
         iv_min=stats["iv_min"], iv_max=stats["iv_max"], message=msg,
+        n_slices=len(vs.slices),
     )
+    if vs.slices:
+        result.fit_rmse = float(np.median([s["rmse_iv"] for s in vs.slices]))
+        result.parity_fraction = float(np.mean(
+            [s["forward_source"] == "parity" for s in vs.slices]))
+    if vs.observed is not None:
+        result.observed_fraction = float(vs.observed.mean())
 
     if not ok:
         logger.warning("Rejected %s %s: %s", ticker, as_of, msg)
+        _discard_superseded(out_path)
         return result
 
     # Diagnostics are only meaningful on an accepted grid.
@@ -416,12 +483,14 @@ def load_surfaces(
     surfaces_dir: str = DEFAULT_SURFACES_DIR,
     start: Optional[str] = None,
     end: Optional[str] = None,
+    builder: Optional[str] = BUILDER_VERSION,
 ) -> dict:
     """Load a ticker's surfaces as ``{date: VolSurface}``.
 
     This is the shape :func:`src.backtest.engine.run_backtest` consumes.
     Surfaces that fail to load are skipped with a warning rather than aborting
-    a long backtest.
+    a long backtest.  As in :func:`load_surface_history`, only surfaces made
+    by *builder* are returned (``None`` loads everything).
     """
     from src.surface.surface import VolSurface
 
@@ -442,6 +511,8 @@ def load_surfaces(
         fp = ddir / "surface.parquet"
         if not fp.exists():
             continue
+        if builder is not None and stored_builder(fp) != builder:
+            continue
         try:
             out[date.fromisoformat(dt_str)] = VolSurface.load(fp)
         except Exception as exc:
@@ -455,6 +526,7 @@ def load_surface_history(
     surfaces_dir: str = DEFAULT_SURFACES_DIR,
     start: Optional[str] = None,
     end: Optional[str] = None,
+    builder: Optional[str] = BUILDER_VERSION,
 ) -> tuple[list[date], np.ndarray, np.ndarray, np.ndarray]:
     """Load a ticker's surfaces as a stacked array for model training.
 
@@ -466,7 +538,10 @@ def load_surface_history(
     grids   : np.ndarray  shape (n, n_k, n_t)
 
     Snapshots whose grid shape differs from the first one are skipped, so the
-    returned array is always rectangular.
+    returned array is always rectangular.  So are snapshots built by a
+    different construction method than *builder* (pass ``None`` to load
+    everything) — a history mixing builders has artificial jumps where the
+    method changes.
     """
     tdir = Path(surfaces_dir) / f"ticker={ticker}"
     if not tdir.exists():
@@ -475,6 +550,7 @@ def load_surface_history(
     dates_out: list[date] = []
     grids: list[np.ndarray] = []
     k_grid = t_grid = None
+    n_other_builder = 0
 
     for ddir in sorted(tdir.iterdir()):
         if not ddir.is_dir() or not ddir.name.startswith("date="):
@@ -486,6 +562,9 @@ def load_surface_history(
             continue
         fp = ddir / "surface.parquet"
         if not fp.exists():
+            continue
+        if builder is not None and stored_builder(fp) != builder:
+            n_other_builder += 1
             continue
 
         df = pd.read_parquet(fp)
@@ -508,6 +587,12 @@ def load_surface_history(
         grids.append(pivot.to_numpy())
         dates_out.append(date.fromisoformat(dt_str))
 
+    if n_other_builder:
+        logger.warning(
+            "%s: skipped %d surface(s) not built by %s — rebuild with "
+            "`python scripts/build_surfaces.py -t %s`",
+            ticker, n_other_builder, builder, ticker,
+        )
     if not grids:
         return [], np.array([]), np.array([]), np.empty((0, 0, 0))
 

@@ -40,7 +40,13 @@ class VolSurface:
     t_grid : np.ndarray  – tenor knots in years, shape (n_t,)
     iv_grid : np.ndarray – implied vol values, shape (n_k, n_t)
     spot : float
-    r : float            – risk-free rate used to build the surface
+    r : float            – reference (3M) risk-free rate for the snapshot
+    observed : np.ndarray or None – bool (n_k, n_t); True where the cell lies
+        inside the quoted strikes of the bracketing expiries, False where it
+        is extrapolated.  None for surfaces built before this was recorded.
+    slices : list[dict]  – per-expiry fit diagnostics (forward, SVI params,
+        quoted k-range, fit RMSE); empty for legacy surfaces.
+    builder : str        – construction method/version that produced the grid
     """
 
     ticker: str
@@ -50,6 +56,9 @@ class VolSurface:
     iv_grid: np.ndarray
     spot: float = 100.0
     r: float = 0.05
+    observed: Optional[np.ndarray] = None
+    slices: list = field(default_factory=list)
+    builder: str = "unknown"
     _interpolator: Optional[RegularGridInterpolator] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -78,16 +87,33 @@ class VolSurface:
         """ATM (log-moneyness=0) implied vol for a given tenor."""
         return float(self.iv(0.0, tenor))
 
-    def skew(self, tenor: float, delta: float = 0.25) -> float:
-        """Approximate 25-delta put-call skew for a given tenor.
+    def delta_strike(self, delta: float, tenor: float, n_iter: int = 8) -> float:
+        """Forward log-moneyness of the option with forward delta *delta*.
 
-        Uses log-moneyness ≈ ±delta·σ·√T as the 25-delta strikes.
+        Positive *delta* is a call (e.g. ``0.25``), negative a put
+        (``-0.25``).  Solves ``k = -N^{-1}(Δc)·σ√T + σ²T/2``, where ``Δc`` is
+        the call-equivalent delta, iterating because σ is the smile vol at
+        the very strike being solved for.
         """
-        atm = self.atm_vol(tenor)
-        dk = delta * atm * np.sqrt(tenor)
-        call_iv = float(self.iv(dk, tenor))
-        put_iv = float(self.iv(-dk, tenor))
-        return put_iv - call_iv
+        from scipy.stats import norm
+
+        call_delta = delta if delta > 0 else 1.0 + delta
+        z = norm.ppf(call_delta)
+        sig = self.atm_vol(tenor)
+        k = 0.0
+        for _ in range(n_iter):
+            k = -z * sig * np.sqrt(tenor) + 0.5 * sig ** 2 * tenor
+            sig = float(self.iv(k, tenor))
+        return float(k)
+
+    def skew(self, tenor: float, delta: float = 0.25) -> float:
+        """Put-minus-call implied vol at ±*delta* (default 25-delta).
+
+        This is the negative of the conventional risk reversal.
+        """
+        k_put = self.delta_strike(-delta, tenor)
+        k_call = self.delta_strike(delta, tenor)
+        return float(self.iv(k_put, tenor)) - float(self.iv(k_call, tenor))
 
     def term_structure(self) -> np.ndarray:
         """ATM vol term structure over the defined tenor grid."""
@@ -102,7 +128,10 @@ class VolSurface:
         rows = []
         for ki, k in enumerate(self.k_grid):
             for ti, T in enumerate(self.t_grid):
-                rows.append({"log_moneyness": k, "tenor": T, "implied_vol": self.iv_grid[ki, ti]})
+                row = {"log_moneyness": k, "tenor": T, "implied_vol": self.iv_grid[ki, ti]}
+                if self.observed is not None:
+                    row["observed"] = bool(self.observed[ki, ti])
+                rows.append(row)
         return pd.DataFrame(rows)
 
     @classmethod
@@ -140,6 +169,7 @@ class VolSurface:
         spot: float,
         r: float = 0.05,
         *,
+        rate_fn: Optional[Callable[[float], float]] = None,
         apply_butterfly_filter: bool = True,
         apply_calendar_filter: bool = True,
         method: str = "svi",
@@ -148,20 +178,34 @@ class VolSurface:
     ) -> VolSurface:
         """Build a VolSurface from a raw options chain DataFrame.
 
-        Pipeline stages
-        ---------------
-        1. ``build_surface_grid``  – IV inversion, forward moneyness, filtering
-        2. ``apply_arbitrage_filters`` – remove butterfly-violating strikes
-        3. ``interpolate_to_grid``  – SVI-per-slice + cubic spline (or RBF)
-        4. ``apply_calendar_filter_grid`` – enforce total-variance monotonicity
+        ``method="svi"`` (default) — per-expiry construction, see
+        :mod:`src.surface.slices`:
+
+        1. two-sided quotes → forward from put-call parity per expiry
+        2. OTM Black-76 implied vols from the mids
+        3. weighted, constrained SVI fit per expiry
+        4. total variance linear in T between bracketing expiries
+        5. ``apply_calendar_filter_grid`` – enforce total-variance monotonicity
+
+        ``method="rbf"`` — the legacy scatter pipeline (pooled tenor bins,
+        quoted IVs, thin-plate RBF).  Kept for comparison and quick tests; it
+        is materially noisier and should not feed features or models.
 
         Parameters
         ----------
         chain : pd.DataFrame
-            Raw options chain (needs strike, T, option_type, mid/bid+ask).
-        ticker, as_of, spot, r : identification & market parameters.
-        apply_butterfly_filter, apply_calendar_filter : bool
-            Toggle arbitrage filters.
+            Raw options chain (needs strike, T, option_type, bid/ask or mid,
+            or a quoted IV column for price-less historical sessions).
+        ticker, as_of, spot : identification & market parameters.
+        r : float
+            Reference rate stored on the surface; also the discount rate for
+            every expiry unless *rate_fn* is given.
+        rate_fn : callable ``T -> r``, optional
+            Term structure of rates, used per expiry for discounting.
+        apply_butterfly_filter : bool
+            Legacy pipeline only — removes butterfly-violating scatter points.
+        apply_calendar_filter : bool
+            Enforce non-decreasing total variance across tenors on the grid.
         method : ``"svi"`` | ``"rbf"``
         k_grid, t_grid : optional grid override (defaults from config).
 
@@ -170,8 +214,28 @@ class VolSurface:
         VolSurface
         """
         from src.surface.filters import apply_arbitrage_filters, apply_calendar_filter_grid
-        from src.surface.grid_builder import build_surface_grid, interpolate_to_grid
+        from src.surface.grid_builder import (
+            build_surface_grid, default_k_grid, default_t_grid, interpolate_to_grid,
+        )
 
+        if method == "svi":
+            from src.surface.slices import BUILDER_VERSION, fit_slices, slices_to_grid
+
+            k_nodes = default_k_grid() if k_grid is None else np.asarray(k_grid, float)
+            t_nodes = default_t_grid() if t_grid is None else np.asarray(t_grid, float)
+            fits = fit_slices(chain, spot, rate_fn if rate_fn is not None else r)
+            if len(fits) < 2:
+                raise ValueError(f"only {len(fits)} expiries could be fitted (need 2)")
+            iv_grid, observed = slices_to_grid(fits, k_nodes, t_nodes)
+            if apply_calendar_filter:
+                iv_grid = apply_calendar_filter_grid(k_nodes, t_nodes, iv_grid)
+            return cls(
+                ticker=ticker, as_of=as_of, k_grid=k_nodes, t_grid=t_nodes,
+                iv_grid=iv_grid, spot=spot, r=r, observed=observed,
+                slices=[f.to_dict() for f in fits], builder=BUILDER_VERSION,
+            )
+
+        # ── Legacy scatter pipeline ───────────────────────────────────────
         # 1. Raw chain → scatter
         scatter = build_surface_grid(chain, spot=spot, r=r)
         logger.info("Scatter: %d points after IV inversion + moneyness filter", len(scatter))
@@ -198,6 +262,7 @@ class VolSurface:
             iv_grid=iv_grid,
             spot=spot,
             r=r,
+            builder=f"legacy-{method}",
         )
 
     # ── Persistence ───────────────────────────────────────────────────────
@@ -226,6 +291,8 @@ class VolSurface:
             "k_max": float(self.k_grid.max()),
             "t_min": float(self.t_grid.min()),
             "t_max": float(self.t_grid.max()),
+            "builder": self.builder,
+            "slices": self.slices,
         }
         # Store metadata as Parquet file-level metadata
         import pyarrow as pa
@@ -261,6 +328,15 @@ class VolSurface:
         )
         iv_grid = pivot.reindex(index=k_grid, columns=t_grid).to_numpy()
 
+        observed = None
+        if "observed" in df.columns:
+            observed = (
+                df.pivot_table(index="log_moneyness", columns="tenor",
+                               values="observed", aggfunc="max")
+                .reindex(index=k_grid, columns=t_grid)
+                .fillna(False).to_numpy(dtype=bool)
+            )
+
         return cls(
             ticker=meta["ticker"],
             as_of=date.fromisoformat(meta["as_of"]),
@@ -269,4 +345,9 @@ class VolSurface:
             iv_grid=iv_grid,
             spot=meta["spot"],
             r=meta.get("r", 0.05),
+            observed=observed,
+            slices=meta.get("slices", []),
+            # Surfaces written before the builder was recorded came from the
+            # pooled-bin pipeline.
+            builder=meta.get("builder", "legacy-svi"),
         )
