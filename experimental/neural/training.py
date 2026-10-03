@@ -10,8 +10,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.neural.neural_vol_model import NeuralVolModel
-from src.neural.losses import weighted_mse_loss, arbitrage_penalty
+from experimental.neural.neural_vol_model import NeuralVolModel
+from experimental.neural.losses import weighted_mse_loss, arbitrage_penalty
 
 logger = logging.getLogger(__name__)
 

@@ -8,9 +8,9 @@ from typing import Optional
 
 import numpy as np
 
-from src.signals.skew_signals import SkewSignal, compute_skew_signal
-from src.signals.term_structure import TermStructureSignal, TermStructureSnapshot
-from src.signals.regime_vol import VolRegime, classify_regime
+from experimental.signals.skew_signals import SkewSignal, compute_skew_signal
+from experimental.signals.term_structure import TermStructureSignal, TermStructureSnapshot
+from experimental.signals.regime_vol import VolRegime, classify_regime
 
 
 class TradeRecommendation(str, Enum):

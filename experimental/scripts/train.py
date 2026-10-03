@@ -19,7 +19,7 @@ def main(data_dir, ticker, epochs, batch_size, lr, checkpoint_dir):
     import numpy as np
     import torch
     from pathlib import Path
-    from src.neural.training import walk_forward_train
+    from experimental.neural.training import walk_forward_train
 
     surfaces_dir = Path(data_dir) / f"ticker={ticker}"
     if not surfaces_dir.exists():

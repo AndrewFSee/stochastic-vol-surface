@@ -15,7 +15,7 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_PLOTLY = False
 
-from src.backtest.metrics import compute_all_metrics
+from experimental.backtest.metrics import compute_all_metrics
 
 
 def generate_tearsheet(

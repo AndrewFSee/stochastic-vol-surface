@@ -7,9 +7,9 @@ from typing import Callable
 import torch
 import torch.nn as nn
 
-from src.neural.neural_sde import NeuralSDE
-from src.neural.encoder import SurfaceEncoder
-from src.neural.decoder import SurfaceDecoder
+from experimental.neural.neural_sde import NeuralSDE
+from experimental.neural.encoder import SurfaceEncoder
+from experimental.neural.decoder import SurfaceDecoder
 
 
 class NeuralVolModel(nn.Module):

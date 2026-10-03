@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 def main(input_file, output, title):
     """Generate Plotly HTML tearsheet from backtest results."""
     import pandas as pd
-    from src.backtest.tearsheet import generate_tearsheet
+    from experimental.backtest.tearsheet import generate_tearsheet
 
     df = pd.read_csv(input_file, parse_dates=["date"])
     if "cumulative_pnl" not in df.columns:

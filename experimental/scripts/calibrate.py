@@ -20,8 +20,8 @@ def main(ticker, start, end, data_dir, output_dir):
     import json
     from pathlib import Path
     from src.data.storage import load_options_chain
-    from src.models.sabr import calibrate_sabr
-    from src.models.svi import calibrate_svi
+    from experimental.models.sabr import calibrate_sabr
+    from experimental.models.svi import calibrate_svi
     import numpy as np
 
     df = load_options_chain(ticker, base_dir=data_dir, start=start, end=end)

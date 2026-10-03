@@ -28,9 +28,9 @@ def main(ticker, start, end, strategy, capital, surfaces_dir, tenor,
     from functools import partial
     from pathlib import Path
 
-    from src.backtest.engine import run_backtest, BacktestConfig
-    from src.backtest.metrics import compute_all_metrics
-    from src.backtest.strategies import STRATEGIES
+    from experimental.backtest.engine import run_backtest, BacktestConfig
+    from experimental.backtest.metrics import compute_all_metrics
+    from experimental.backtest.strategies import STRATEGIES
     from src.surface.batch import load_surfaces
 
     surfaces = load_surfaces(ticker, surfaces_dir=surfaces_dir, start=start, end=end)

@@ -1,6 +1,19 @@
-# Deep Stochastic Volatility Surface Modeler
+# Stochastic Vol Surface
 
-A production-grade Python framework that scrapes live options chains, builds arbitrage-free implied-volatility surfaces, calibrates parametric models (SABR, Heston, SVI, rough-Bergomi), and trains a Neural SDE to learn residual dynamics.  Tradeable signals and a walk-forward backtest engine are included, together with a Streamlit dashboard.
+Daily implied-volatility surfaces for SPY and other liquid US equity and ETF
+options, a point-in-time feature table built from them for downstream models,
+and a dashboard for reading both.
+
+The pipeline: scrape option chains each day after the close, fit an SVI smile
+per expiry on parity-implied forwards, interpolate to constant maturities,
+derive level, skew, term-structure, variance-swap and realised-vol features,
+and serve them in a Streamlit dashboard. SPY's rebuilt 30-day variance swap
+tracks VIX with 0.98 daily-change correlation; `scripts/validate_surfaces.py`
+re-checks this.
+
+Research code that is not validated against market data (parametric models,
+a neural SDE, trading signals, a backtest engine, LLM agent stubs) lives in
+[`experimental/`](experimental/README.md), outside the main package.
 
 ---
 
@@ -8,20 +21,17 @@ A production-grade Python framework that scrapes live options chains, builds arb
 
 ```
 stochastic-vol-surface/
-├── config/                  # YAML configuration
-│   ├── default.yaml         # Scraper, model, signal, backtest params
-│   └── surface_grid.yaml    # Log-moneyness × tenor grid
+├── config/
+│   ├── default.yaml         # Scraper tickers and settings
+│   └── surface_grid.yaml    # Log-moneyness × tenor grid of the stored surfaces
 ├── src/
-│   ├── data/                # Ingestion: yfinance, FRED, Kaggle
-│   ├── surface/             # IV inversion, grid builder, interpolation, filters
-│   ├── models/              # SABR, Heston, SVI, rough-Bergomi, calibration
-│   ├── neural/              # Neural SDE, encoder, decoder, training
-│   ├── signals/             # Skew, term-structure, butterfly, regime signals
-│   ├── backtest/            # Walk-forward engine, strategies, Greeks, metrics
-│   ├── dashboard/           # Streamlit app
-│   └── agents/              # LLM-based analyst / recommender / narrator stubs
-├── scripts/                 # CLI entry-points
-└── tests/                   # Pytest test suite
+│   ├── data/                # Ingestion: options (yfinance), VIX, FRED rates, prices, Kaggle
+│   ├── surface/             # IV inversion, per-expiry SVI, grid, validation
+│   ├── features/            # Point-in-time feature table
+│   └── dashboard/           # Streamlit app
+├── scripts/                 # CLI entry points
+├── tests/                   # Pytest suite (offline, synthetic data)
+└── experimental/            # Parked research code; see experimental/README.md
 ```
 
 ---
@@ -29,14 +39,12 @@ stochastic-vol-surface/
 ## Quick Start
 
 ```bash
-# 1. Clone & install
-git clone https://github.com/your-org/stochastic-vol-surface.git
-cd stochastic-vol-surface
+# 1. Install
 pip install -e ".[dev]"
 
 # 2. Configure secrets
 cp .env.example .env
-# edit .env with your FRED_API_KEY and OPENAI_API_KEY
+# edit .env with your FRED_API_KEY (and Kaggle credentials for the historical backfill)
 
 # 3. Collect today's data (options + VIX + rates + prices + surfaces + features)
 python scripts/schedule_scraper.py --once
@@ -55,21 +63,12 @@ python scripts/build_features.py
 python scripts/data_health.py
 python scripts/validate_surfaces.py --strict
 
-# 7. Calibrate parametric models
-python scripts/calibrate.py --start 2026-02-19 --end 2026-07-31
-
-# 8. Train the Neural SDE
-python scripts/train.py --ticker SPY --epochs 100 --batch-size 32
-
-# 9. Run walk-forward backtest
-python scripts/backtest.py --start 2026-02-19 --end 2026-07-31
-
-# 10. Generate HTML tearsheet
-python scripts/tearsheet.py --output reports/tearsheet.html
-
-# 11. Launch dashboard
-streamlit run src/dashboard/app.py
+# 8. Launch the dashboard
+python -m streamlit run src/dashboard/app.py
 ```
+
+On Windows without an activated virtual environment, call its interpreter
+directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 
 ---
 
@@ -117,7 +116,7 @@ is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 ## Surface Corpus
 
 `src/surface/batch.py` turns the raw chain store into the standardised surface
-store consumed by the neural, calibration, and backtest layers.
+store that the feature table and dashboard read (and the experimental models).
 
 * **Resumable** — existing surfaces are skipped unless `--overwrite`, so the
   daily incremental run costs one build per ticker.
@@ -218,80 +217,6 @@ second-order and small, so quote noise is a larger share of them.
 
 ---
 
-## Parametric Models
-
-| Model | Module | Method |
-|---|---|---|
-| SABR | `src/models/sabr.py` | Hagan (2002) approximation, L-BFGS-B calibration |
-| Heston | `src/models/heston.py` | Characteristic function + FFT pricing |
-| SVI | `src/models/svi.py` | Gatheral raw SVI, quasi-explicit fit |
-| rough-Bergomi | `src/models/rough_bergomi.py` | Monte Carlo pricing |
-
-Model selection via AIC/BIC is in `src/models/model_selection.py`.
-
----
-
-## Neural SDE
-
-The `NeuralSDE` (`src/neural/neural_sde.py`) models the latent vol-surface dynamics:
-
-```
-dY_t = f_θ(t, Y_t) dt + g_θ(t, Y_t) dW_t
-```
-
-where `f` and `g` are MLPs.  A `SurfaceEncoder` (Conv2D) compresses daily snapshots to a latent vector, and a `SurfaceDecoder` (MLP) reconstructs predicted surfaces.  The model learns residuals between market IV and best-fit parametric IV.
-
----
-
-## Signals
-
-| Signal | Module |
-|---|---|
-| 25-delta skew | `src/signals/skew_signals.py` |
-| Term-structure slope/curvature | `src/signals/term_structure.py` |
-| Butterfly mispricing | `src/signals/butterfly.py` |
-| Calendar spread arbitrage | `src/signals/calendar_spread.py` |
-| Vol regime (Low/Normal/High/Crisis) | `src/signals/regime_vol.py` |
-| Composite recommendation | `src/signals/composite.py` |
-
----
-
-## Backtest
-
-Walk-forward engine in `src/backtest/engine.py`.
-
-Every position is a bundle of `OptionLeg`s carrying a full contract spec —
-type, strike, expiry, signed quantity. That is what makes honest P&L possible:
-each open leg is repriced daily against the new surface at its *own* moneyness
-and *remaining* tenor, instead of being approximated from one ATM vol change.
-
-Each day the engine reprices open legs (settling expired ones at intrinsic),
-marks the delta hedge against the spot move, rebalances the hedge, rolls
-positions that hit their holding period, and opens a new one when flat.
-
-```bash
-python scripts/backtest.py --ticker SPY --start 2026-02-19 --end 2026-07-31 \
-    --strategy straddle --tenor 0.25 --holding-days 5
-```
-
-Strategies (`src/backtest/strategies.py`): `straddle`, `short_straddle`,
-`risk_reversal`, `butterfly`. All are sized to a target **gross** vega
-(`--target-vega`, cash P&L per vol point) so their results are comparable.
-Gross rather than net matters: a risk reversal's net vega is structurally near
-zero, and sizing off it divides by ~0.
-
-Output includes a P&L attribution — delta, gamma, vega, theta, hedge, and an
-unexplained residual. The residual is a diagnostic: it measures how much of
-the day's move the second-order Greek expansion fails to capture, so a large
-residual means the surface moved in a way the Greeks did not describe.
-
-> The engine assumes you can trade at the surface's interpolated mid with a
-> flat bps cost. It does not model bid-ask by strike, early assignment, or
-> liquidity limits — treat results as a signal-quality measure, not a P&L
-> forecast.
-
----
-
 ## Historical backfill
 
 The live corpus starts in Feb 2026 and contains no crisis regime. Historical
@@ -315,12 +240,23 @@ convention, so keeping them apart preserves provenance — and stops a
 deliberately, and re-run `scripts/backfill_rates.py --start 2009-01-01` first
 so historical forwards use the rates of their own era rather than today's.
 
+> The historical surfaces on disk predate the per-expiry builder, so the
+> loaders skip them. Rebuild before use (about four hours for 2010–2023), then
+> build their features:
+>
+> ```bash
+> python scripts/build_surfaces.py --options-dir data/historical/options \
+>     --surfaces-dir data/historical/surfaces
+> python scripts/build_features.py --surfaces-dir data/historical/surfaces \
+>     --out data/historical/features/surface_features.parquet
+> ```
+
 ---
 
 ## Dashboard
 
 ```bash
-streamlit run src/dashboard/app.py
+python -m streamlit run src/dashboard/app.py
 ```
 
 The dashboard reads the feature table and the per-expiry fits stored with
@@ -345,12 +281,14 @@ defaults to `data`.
 
 ## Configuration
 
-Edit `config/default.yaml` to change tickers, model hyperparameters, signal thresholds, and backtest parameters. Edit `config/surface_grid.yaml` to change the grid resolution.
+Edit `config/default.yaml` to change the tickers and scraper settings.
+Parameters for the parked research code are in `experimental/config.yaml`.
 
-The grid in `config/surface_grid.yaml` (25 log-moneyness knots × 8 tenors) is
-the contract between the surface, neural, and backtest layers — changing it
-invalidates every surface already built, so re-run
-`scripts/build_surfaces.py --overwrite` afterwards.
+`config/surface_grid.yaml` (25 log-moneyness knots × 8 tenors) defines the
+grid stored with each surface. Changing it invalidates every surface already
+built, so re-run `scripts/build_surfaces.py --overwrite` afterwards. The
+feature table does not depend on it: features are read from the per-expiry
+fits at exact tenors and deltas.
 
 ---
 
@@ -359,7 +297,7 @@ invalidates every surface already built, so re-run
 | Variable | Description |
 |---|---|
 | `FRED_API_KEY` | FRED API key (free registration) |
-| `OPENAI_API_KEY` | OpenAI API key for agent stubs |
+| `OPENAI_API_KEY` | Optional; only the experimental agent stubs use it |
 | `KAGGLE_USERNAME` | Kaggle username for backfill loader |
 | `KAGGLE_KEY` | Kaggle API key |
 
@@ -392,6 +330,16 @@ python scripts/data_health.py --csv-dir data/logs/health
 
 It reports collection freshness, per-ticker gaps against the NYSE calendar,
 snapshot quality, surface-build coverage, and the VIX / rates stores.
+
+---
+
+## Experimental
+
+[`experimental/`](experimental/README.md) holds the parametric models (SABR,
+Heston, SVI, rough Bergomi), the neural SDE, the trading signals, the
+walk-forward backtest engine and the LLM agent stubs. None of it has been
+validated against market data. It is outside the installed `src` package, and
+its tests run separately (`pytest experimental/tests`).
 
 ---
 

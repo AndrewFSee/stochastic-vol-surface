@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from src.models.sabr import sabr_vol, calibrate_sabr
+from experimental.models.sabr import sabr_vol, calibrate_sabr
 
 
 # ── sabr_vol smoke tests ──────────────────────────────────────────────────────

@@ -487,7 +487,8 @@ def load_surfaces(
 ) -> dict:
     """Load a ticker's surfaces as ``{date: VolSurface}``.
 
-    This is the shape :func:`src.backtest.engine.run_backtest` consumes.
+    This is the shape the experimental backtest engine
+    (``experimental.backtest.engine.run_backtest``) consumes.
     Surfaces that fail to load are skipped with a warning rather than aborting
     a long backtest.  As in :func:`load_surface_history`, only surfaces made
     by *builder* are returned (``None`` loads everything).

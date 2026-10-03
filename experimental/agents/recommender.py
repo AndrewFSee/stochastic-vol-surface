@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from src.signals.composite import CompositeSignal, TradeRecommendation
+from experimental.signals.composite import CompositeSignal, TradeRecommendation
 
 logger = logging.getLogger(__name__)
 

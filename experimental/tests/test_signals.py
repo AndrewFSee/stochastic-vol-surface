@@ -3,18 +3,18 @@
 import numpy as np
 import pytest
 
-from src.signals.skew_signals import (
+from experimental.signals.skew_signals import (
     SkewSignal,
     SkewSnapshot,
     compute_skew_signal,
 )
-from src.signals.term_structure import (
+from experimental.signals.term_structure import (
     TermStructureSignal,
     TermStructureSnapshot,
     detect_inversion,
 )
-from src.signals.regime_vol import VolRegime, classify_regime, regime_time_series
-from src.signals.composite import (
+from experimental.signals.regime_vol import VolRegime, classify_regime, regime_time_series
+from experimental.signals.composite import (
     CompositeSignal,
     TradeRecommendation,
     aggregate_signals,

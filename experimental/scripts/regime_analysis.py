@@ -3,11 +3,11 @@
 
 This is the question the live sample could not answer: does a strategy survive
 a crisis, or does it only work in calm markets?  Results are grouped by the VIX
-regime thresholds in ``config/default.yaml``.
+regime thresholds in ``experimental/config.yaml``.
 
 Usage:
-    python scripts/regime_analysis.py --surfaces-dir data/historical/surfaces
-    python scripts/regime_analysis.py --surfaces-dir data/surfaces --output report.csv
+    python -m experimental.scripts.regime_analysis --surfaces-dir data/historical/surfaces
+    python -m experimental.scripts.regime_analysis --surfaces-dir data/surfaces --output report.csv
 """
 
 import logging
@@ -60,12 +60,15 @@ def main(ticker, surfaces_dir, start, end, tenor, holding_days,
     """Backtest all strategies and summarise performance by vol regime."""
     import yaml
 
-    from src.backtest.engine import BacktestConfig, run_backtest
-    from src.backtest.metrics import compute_all_metrics
-    from src.backtest.strategies import STRATEGIES
+    from experimental.backtest.engine import BacktestConfig, run_backtest
+    from experimental.backtest.metrics import compute_all_metrics
+    from experimental.backtest.strategies import STRATEGIES
     from src.surface.batch import load_surfaces
 
-    cfg_all = yaml.safe_load(open("config/default.yaml"))
+    from pathlib import Path
+
+    cfg_path = Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg_all = yaml.safe_load(cfg_path.read_text())
     sig_cfg = cfg_all["signals"]
 
     click.echo(f"Loading surfaces for {ticker} from {surfaces_dir} …")

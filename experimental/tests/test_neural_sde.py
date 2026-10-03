@@ -1,9 +1,11 @@
 """Neural SDE tensor shape tests."""
 
-import torch
 import pytest
 
-from src.neural.neural_sde import NeuralSDE
+# torch is an optional extra (pip install -e ".[experimental]").
+torch = pytest.importorskip("torch")
+
+from experimental.neural.neural_sde import NeuralSDE  # noqa: E402
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
