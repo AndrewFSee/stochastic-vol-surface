@@ -1,10 +1,10 @@
 """Per-expiry surface construction: parity forwards, OTM Black IVs, SVI slices.
 
-This is the pipeline :meth:`VolSurface.from_chain` uses by default.  It
-replaces the older pooled-bin approach in :mod:`src.surface.grid_builder`,
-which merged every expiry within ±30% of a target tenor into one SVI fit and
-gave them all the same time-to-expiry.  That mixing was the dominant source of
-day-to-day noise in the stored surfaces.
+This is the pipeline :meth:`VolSurface.from_chain` uses.  It replaced an
+older pooled-bin approach (since removed; see commit cf8bbea) that merged
+every expiry within ±30% of a target tenor into one SVI fit and gave them all
+the same time-to-expiry.  That mixing was the dominant source of day-to-day
+noise in the stored surfaces.
 
 Pipeline, per expiry
 --------------------

@@ -265,7 +265,6 @@ def build_one(
     *,
     options_dir: str = DEFAULT_OPTIONS_DIR,
     surfaces_dir: str = DEFAULT_SURFACES_DIR,
-    method: str = "svi",
     overwrite: bool = False,
     rates_history: Optional[pd.DataFrame] = None,
     fallback_rate: float = 0.05,
@@ -276,8 +275,6 @@ def build_one(
     ----------
     ticker, as_of
         Which snapshot to build.
-    method
-        ``"svi"`` (default) or ``"rbf"``, passed to the interpolator.
     overwrite
         Rebuild even if the output already exists.
     rates_history
@@ -292,9 +289,7 @@ def build_one(
     out_path = surface_path(ticker, as_of, surfaces_dir)
     # A surface from a different construction method is stale, not done:
     # skipping it would leave a corpus that silently mixes builders.
-    if out_path.exists() and not overwrite and (
-        method != "svi" or stored_builder(out_path) == BUILDER_VERSION
-    ):
+    if out_path.exists() and not overwrite and stored_builder(out_path) == BUILDER_VERSION:
         return SurfaceBuildResult(
             ticker=ticker, as_of=as_of, status="skipped", path=out_path,
             message="already exists",
@@ -344,7 +339,6 @@ def build_one(
     try:
         vs = VolSurface.from_chain(
             chain, ticker=ticker, as_of=as_of, spot=spot, r=r, rate_fn=rate_fn,
-            method=method,
         )
     except Exception as exc:
         _discard_superseded(out_path)
@@ -354,7 +348,7 @@ def build_one(
         )
 
     ok, msg, stats = score_grid(vs.iv_grid)
-    if ok and method == "svi" and len(vs.slices) < MIN_SLICES:
+    if ok and len(vs.slices) < MIN_SLICES:
         ok, msg = False, f"only {len(vs.slices)} expiries fitted (need {MIN_SLICES})"
 
     result = SurfaceBuildResult(
@@ -405,7 +399,6 @@ def build_corpus(
     *,
     options_dir: str = DEFAULT_OPTIONS_DIR,
     surfaces_dir: str = DEFAULT_SURFACES_DIR,
-    method: str = "svi",
     overwrite: bool = False,
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -458,7 +451,7 @@ def build_corpus(
             res = build_one(
                 tkr, d,
                 options_dir=options_dir, surfaces_dir=surfaces_dir,
-                method=method, overwrite=overwrite, rates_history=rates_history,
+                overwrite=overwrite, rates_history=rates_history,
             )
             report.results.append(res)
 

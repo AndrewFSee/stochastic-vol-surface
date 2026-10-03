@@ -159,7 +159,7 @@ def leg_iv(surface, leg: OptionLeg, as_of: date, spot: float, r: float) -> float
     """Look up a leg's implied vol on *surface* at its own moneyness/tenor.
 
     The surface is indexed by log-forward-moneyness ``k = ln(K/F)`` with
-    ``F = S·e^{rT}``, matching ``grid_builder.build_surface_grid``.
+    ``F = S·e^{rT}``, the carry forward; the surfaces now use parity forwards (see README).
     """
     T = leg.years_to_expiry(as_of)
     if T <= 0:

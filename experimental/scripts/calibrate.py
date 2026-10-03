@@ -44,7 +44,7 @@ def main(ticker, start, end, data_dir, output_dir):
         raise SystemExit(1)
 
     from src.data.rates import get_rate_for_tenor, load_rates_history
-    from src.surface.grid_builder import default_k_grid
+    from src.surface.grid import default_k_grid
 
     rates_history = load_rates_history()
 
