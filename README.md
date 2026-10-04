@@ -385,6 +385,22 @@ single-stock history than the live corpus has.
 
 ---
 
+## Notebooks
+
+Executed notebooks that document how the models were built and tested:
+
+| Notebook | Covers |
+|---|---|
+| `notebooks/02_surface_construction.ipynb` | One day's chain to a surface: parity forwards, OTM IVs (and why not Yahoo's), per-expiry SVI, interpolation and masking. Then the surface backtest against VIX (2010–2023 and 2026), the old pipeline vs the new one, noise floors, and the rejected eSSVI fit |
+| `notebooks/03_volatility_forecasting.ipynb` | The target, the no-look-ahead walk-forward method, every model, the backtests at 5 and 21 days with significance tests and regime breakdowns, LSTM and LSTM-GARCH, the feature-usefulness tests, pooling, interval calibration and the live 2026 track record |
+
+They read from the local data stores. Rebuild and re-execute them with
+`python notebooks/_build/build.py` (15–35 minutes depending on load, mostly the LSTMs; needs
+`pip install -e ".[notebooks,experimental]"`). Cells live in
+`notebooks/_build/nb_*.py`, so changes stay readable in diffs.
+
+---
+
 ## Interpretation (Claude)
 
 The Interpretation tab sends a structured snapshot of the selected ticker
