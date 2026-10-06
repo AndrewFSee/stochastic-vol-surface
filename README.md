@@ -84,6 +84,7 @@ directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 | Source | Module | Description |
 |---|---|---|
 | yfinance | `src/data/scraper.py` | Daily options chains (41 tickers, below) |
+| CBOE | `src/data/cboe.py` | Fallback chains (free delayed quotes) when a yfinance chain fails or is thin |
 | yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, VIX1D, SKEW, VVIX; VXN, VXD, OVX, GVZ, MOVE |
 | FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
 | FRED API | `src/data/macro.py` | Credit spreads, dollar, breakevens, real yields, financial-stress indices |
@@ -157,7 +158,9 @@ The last two steps of every daily run protect the data and check it:
   errors, every ticker got the latest session's chain and surface, the
   features and forecasts are current, SPY's 30d variance swap still tracks VIX
   (63-day daily-change correlation ≥ 0.8, mean gap ≤ 1.5 pts, latest gap
-  ≤ 3 pts), and the backup is under two days old. Results are appended to
+  ≤ 3 pts), the backup is under two days old, and the data and backup drives
+  each have at least 5 GB free (the store grows ~4–5 GB a year with 41
+  tickers). Results are appended to
   `data/logs/health_checks.jsonl`. Any failure raises a Windows desktop
   notification and a banner at the top of the dashboard, and the Quality tab
   lists the latest results. Run the checks by hand with
@@ -252,10 +255,23 @@ new or rebuilt surfaces (about 20 s instead of 3 min); `--no-cache` recomputes
 everything. The cache is discarded when `FEATURE_VERSION` changes.
 
 ```python
-from src.features import load_feature_table
+from src.features import load_feature_table, training_frame, describe
 
 df = load_feature_table(tickers=["SPY", "QQQ"], start="2026-06-01")
+
+# Historical + live rows with forward labels over (t, t+h] sessions:
+# label_rv_<h> (realised vol), label_ret_<h> (log return),
+# label_atm30_chg_<h> (change in 30d ATM vol).
+train = training_frame(horizons=(5, 21))
+describe("rr25_30d")    # unit, meaning and when the column is NaN
 ```
+
+**Data contract.** `src/features/catalog.py` documents every column (group,
+unit, meaning, when NaN); `python scripts/feature_catalog.py` writes
+[docs/feature_catalog.md](docs/feature_catalog.md) and a machine-readable
+`docs/feature_catalog.json`. A test fails if the builder adds a column the
+catalog does not cover. Labels look into the future: never use them as
+features, and split train/test by date with a gap of at least *h* sessions.
 
 **Timing.** Row *t* uses only what was known at about 16:30 ET on *t*: that
 day's option snapshot, the underlying's close and the VIX closes. To predict
@@ -396,7 +412,9 @@ python -m streamlit run src/dashboard/app.py
 ```
 
 The dashboard reads the feature table and the per-expiry fits stored with
-each surface. It computes nothing from live market data. One filter row
+each surface. It computes nothing from live market data. Tickers are ordered
+and labelled by asset class (`src/data/universe.py`), in the picker and in
+the overview table. One filter row
 (ticker, as-of date, history window, comparison period) scopes every view:
 
 | Tab | Shows |
@@ -503,8 +521,13 @@ stocks. Production uses the earnings-adjusted model (`forecast/2`).
 
 The feature table carries the inputs for other models: `earn_next_date`,
 `earn_days_to`, `earn_days_since`, `earn_implied_move`, `earn_hist_move`.
-Dates for releases far ahead may have been estimates at the time; within a
-few weeks of a release they are almost always confirmed.
+**Point-in-time dates.** Yahoo's history records each release's *actual*
+date, which can differ from what was scheduled weeks earlier. Every refresh
+therefore also saves the upcoming schedule to
+`data/events/snapshots/earnings_<date>.parquet`, and feature rows covered by a
+snapshot (from 6 Oct 2026) use the date scheduled at the time. Older rows use
+the actual dates; within a few weeks of a release those were almost always
+already public.
 
 ### Are the features useful?
 
@@ -519,9 +542,16 @@ significant predictive power:
   (p = 0.006) but not after correction.
 - **Forward variance-swap P&L:** nothing predicts it.
 
-These are linear, one-index results. The features may still matter
-non-linearly, in combination, or across single stocks, but that needs more
-single-stock history than the live corpus has.
+These are linear, one-index results. `scripts/feature_study.py` repeats the
+question for every ticker with enough history and summarises it by asset
+class ([docs/feature_study.md](docs/feature_study.md)): 17 surface, market,
+macro and earnings features against excess variance (realised over implied),
+forward return and the change in implied vol. A first run (Oct 2026, about
+130 live days for the seven non-SPY tickers) hints that on single stocks the
+30d risk reversal and ATM skew predict realised vol beyond implied (|t| > 2
+in all three stocks, R² ≈ 0.2). That is about six independent windows per
+stock, so it is a lead to re-test, not a result. Re-run the study in early
+2027.
 
 ---
 
@@ -547,7 +577,8 @@ The Interpretation tab sends a structured snapshot of the selected ticker
 and date to Claude (`claude-opus-5-5`) and shows a short written read. The
 snapshot holds levels, changes, percentiles labelled with the history behind
 them, the smile, term structure, realised vol, the forecast with its track
-record, data quality and peers.
+record, earnings (single stocks), market and credit context, data quality,
+and peers: the same asset class plus SPY.
 
 - **On demand and cached.** Nothing is sent until you press the button. Each
   result is stored in `data/interpretations/` per ticker and date, keyed by a
