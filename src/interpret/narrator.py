@@ -74,7 +74,8 @@ the surface is less reliable that day; mention it if so.
 
 Format: Markdown, about 200-300 words. Start with a one-sentence headline in \
 bold. Then three short sections with these level-4 headings: "Surface", \
-"Realised vs implied", "Forecast". Use peers only where they add contrast. No \
+"Realised vs implied", "Forecast". Peers are the same asset class (asset_group) \
+plus SPY as the broad market; use them only where they add contrast. No \
 tables, no preamble, no closing summary."""
 
 

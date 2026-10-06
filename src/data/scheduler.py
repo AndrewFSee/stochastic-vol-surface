@@ -394,7 +394,8 @@ def _collect_macro(as_of: date, macro_dir: str) -> None:
 def _collect_earnings(as_of: date, cfg: ScraperConfig) -> int:
     """Refresh earnings dates: the stocks already known every day (dates get
     confirmed or moved), every configured ticker on Mondays (new tickers)."""
-    from src.data.events import fetch_earnings, load_earnings, save_earnings
+    from src.data.events import (fetch_earnings, load_earnings, save_earnings,
+                                 save_earnings_snapshot)
 
     known = set(load_earnings(cfg.events_dir)["ticker"])
     tickers = cfg.tickers if (as_of.weekday() == 0 or not known) else \
@@ -402,6 +403,7 @@ def _collect_earnings(as_of: date, cfg: ScraperConfig) -> int:
     df = fetch_earnings(tickers)
     if not df.empty:
         save_earnings(df, cfg.events_dir)
+        save_earnings_snapshot(df, as_of, cfg.events_dir)
     return int(df["ticker"].nunique()) if not df.empty else 0
 
 

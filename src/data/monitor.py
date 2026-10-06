@@ -41,6 +41,9 @@ MAX_MEAN_ABS_DIFF = 1.5
 MAX_LATEST_DIFF = 3.0
 ACCURACY_WINDOW = 63
 MAX_BACKUP_AGE = timedelta(days=2)
+#: Free space below which the data (or backup) drive raises an alert.  With
+#: ~40 tickers the store grows ~4-5 GB a year, so this leaves about a year.
+MIN_FREE_GB = 5.0
 
 
 @dataclass
@@ -136,6 +139,28 @@ def _check_accuracy(features: Optional[pd.DataFrame]) -> Check:
     return Check("accuracy", not problems, "; ".join(problems) + " — " + msg if problems else msg)
 
 
+def _check_disk(paths: Sequence[Optional[str]], min_free_gb: float = MIN_FREE_GB) -> Check:
+    """Free space on every drive the pipeline writes to."""
+    import shutil
+
+    seen, parts, low = set(), [], []
+    for p in paths:
+        if not p:
+            continue
+        anchor = Path(p).resolve().anchor or str(Path(p).resolve())
+        if anchor in seen or not Path(anchor).exists():
+            continue
+        seen.add(anchor)
+        free = shutil.disk_usage(anchor).free / 1e9
+        parts.append(f"{anchor.rstrip(chr(92) + '/')} {free:.1f} GB free")
+        if free < min_free_gb:
+            low.append(anchor)
+    msg = ", ".join(parts) or "no drives to check"
+    if low:
+        return Check("disk", False, f"{msg} (below {min_free_gb:.0f} GB)")
+    return Check("disk", True, msg)
+
+
 def _check_backup(backup_dir: Optional[str], now: datetime) -> Optional[Check]:
     if not backup_dir:
         return None
@@ -163,6 +188,7 @@ def run_checks(
     forecasts_path: str = "data/forecasts/vol_forecasts.parquet",
     backup_dir: Optional[str] = None,
     max_stale: int = 0,
+    min_free_gb: float = MIN_FREE_GB,
 ) -> list[Check]:
     """Run every check; never raises (a crashing check becomes a failed check)."""
     as_of = as_of or date.today()
@@ -187,6 +213,7 @@ def run_checks(
     b = guard("backup", _check_backup, backup_dir, datetime.now())
     if b is not None:
         out.append(b)
+    out.append(guard("disk", _check_disk, [options_dir, backup_dir], min_free_gb))
     return out
 
 

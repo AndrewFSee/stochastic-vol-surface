@@ -119,3 +119,21 @@ def test_dataset_without_earnings_has_identical_ex_columns(stores):
     assert not ds["ev_day"].any() and not ds["ev_in_21"].any()
     pd.testing.assert_series_equal(ds["y_21_ex"], ds["y_21"], check_names=False)
     assert (ds["rv_m_ex"] - ds["rv_m"]).abs().max() < 1e-12
+
+
+def test_snapshot_schedule_overrides_the_actual_date(tmp_path):
+    """A release scheduled for Apr 30 but moved to May 7: rows after the
+    snapshot see the schedule known then, rows before it the actual date."""
+    from src.data.events import load_earnings_snapshots, save_earnings_snapshot
+    from src.features.earnings import earnings_features
+
+    save_earnings_snapshot(_earn("2026-04-30 16:00"), "2026-04-20", str(tmp_path))
+    snaps = load_earnings_snapshots(str(tmp_path))
+    assert snaps["snapshot_date"].iloc[0] == pd.Timestamp("2026-04-20")
+
+    actual = _earn("2026-01-29 16:00", "2026-05-07 16:00")
+    df = pd.DataFrame({"ticker": "AAA", "date": pd.to_datetime(["2026-04-17", "2026-04-22"])})
+    out = earnings_features(df, actual, snapshots=snaps).set_index("date")
+    assert out.loc["2026-04-17", "earn_next_date"] == pd.Timestamp("2026-05-08")   # actual
+    assert out.loc["2026-04-22", "earn_next_date"] == pd.Timestamp("2026-05-01")   # scheduled
+    assert out.loc["2026-04-22", "earn_days_to"] == 7

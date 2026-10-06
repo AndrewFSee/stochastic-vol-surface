@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout,
 @click.option("--events-dir", default="data/events", show_default=True)
 def main(tickers, events_dir):
     """Fetch and store earnings dates."""
-    from src.data.events import fetch_earnings, save_earnings
+    from src.data.events import fetch_earnings, save_earnings, save_earnings_snapshot
 
     if not tickers:
         import yaml
@@ -35,6 +35,7 @@ def main(tickers, events_dir):
     if df.empty:
         raise SystemExit("No earnings dates returned.")
     save_earnings(df, events_dir)
+    save_earnings_snapshot(df, pd_now().date(), events_dir)
     now = pd_now()
     nxt = df[df["announced"] >= now].groupby("ticker")["announced"].min()
     click.echo(f"\n{len(df)} releases for {df['ticker'].nunique()} tickers. Next scheduled:")

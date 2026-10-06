@@ -8,10 +8,11 @@ know which session each release lands on:
 * released after the close (16:00 ET or later)  → the next session.
 
 Yahoo's history reaches back to about 2002 and includes the next scheduled
-date.  Dates that were still estimates at the time are stored as the actual
-date, so a row long before a release may see a date that was not confirmed
-yet; within the last few weeks before a release the date is almost always
-public.
+date.  That history records each release's *actual* date, which may not be
+what was scheduled weeks earlier.  So every refresh also saves a dated
+snapshot of the upcoming schedule (``snapshots/earnings_<date>.parquet``);
+features for dates on or after the first snapshot use the schedule known on
+that day (point-in-time), earlier dates fall back to the actual dates.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_EVENTS_DIR = "data/events"
 EARNINGS_FILENAME = "earnings.parquet"
+SNAPSHOT_DIR = "snapshots"
 
 #: Releases at or after this hour (ET) move the next session.
 AFTER_CLOSE_HOUR = 12
@@ -80,6 +82,36 @@ def save_earnings(df: pd.DataFrame, events_dir: str = DEFAULT_EVENTS_DIR) -> Pat
     logger.info("Saved %d earnings dates for %d tickers -> %s",
                 len(df), df["ticker"].nunique(), out)
     return out
+
+
+def save_earnings_snapshot(df: pd.DataFrame, as_of, events_dir: str = DEFAULT_EVENTS_DIR) -> Path:
+    """Record the releases scheduled after *as_of*, as known on *as_of*.
+
+    Same-day snapshots are merged (later tickers replace earlier ones), so a
+    partial refresh never drops tickers it did not fetch.
+    """
+    as_of = pd.Timestamp(as_of).normalize()
+    cutoff = as_of.tz_localize("America/New_York")
+    up = df[pd.to_datetime(df["announced"]) >= cutoff][["ticker", "announced"]].copy()
+    out = Path(events_dir) / SNAPSHOT_DIR / f"earnings_{as_of:%Y-%m-%d}.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        old = pd.read_parquet(out)
+        up = pd.concat([old[~old["ticker"].isin(up["ticker"].unique())], up], ignore_index=True)
+    up.sort_values(["ticker", "announced"]).to_parquet(out, index=False, engine="pyarrow")
+    return out
+
+
+def load_earnings_snapshots(events_dir: str = DEFAULT_EVENTS_DIR) -> pd.DataFrame:
+    """Every saved schedule snapshot: ``snapshot_date, ticker, announced``."""
+    frames = []
+    for p in sorted((Path(events_dir) / SNAPSHOT_DIR).glob("earnings_*.parquet")):
+        f = pd.read_parquet(p)
+        f["snapshot_date"] = pd.Timestamp(p.stem.split("_", 1)[1])
+        frames.append(f)
+    if not frames:
+        return pd.DataFrame(columns=["snapshot_date", "ticker", "announced"])
+    return pd.concat(frames, ignore_index=True)
 
 
 def load_earnings(events_dir: str = DEFAULT_EVENTS_DIR) -> pd.DataFrame:

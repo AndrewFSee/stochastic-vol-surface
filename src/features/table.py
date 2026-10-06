@@ -266,10 +266,11 @@ def build_feature_table(
         df = df.merge(m, left_on="date", right_index=True, how="left")
 
     # Earnings timing and implied / historical event moves (single stocks).
-    from src.data.events import load_earnings
+    from src.data.events import load_earnings, load_earnings_snapshots
     from src.features.earnings import earnings_features
 
-    df = earnings_features(df, load_earnings(events_dir), prices)
+    df = earnings_features(df, load_earnings(events_dir), prices,
+                           load_earnings_snapshots(events_dir))
     df = df.drop(columns=["_atm_term"], errors="ignore")
 
     df = add_dynamics(df)

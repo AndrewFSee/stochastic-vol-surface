@@ -59,3 +59,17 @@ def test_alert_only_on_failure(monkeypatch):
     assert not M.alert_if_failing([M.Check("run", True, "ok")])
     assert M.alert_if_failing([M.Check("backup", False, "drive missing")])
     assert len(sent) == 1 and "backup" in sent[0][1]
+
+
+def test_disk_check_flags_low_free_space(tmp_path, monkeypatch):
+    import shutil
+    from collections import namedtuple
+
+    from src.data.monitor import _check_disk
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage(100e9, 97e9, 3e9))
+    c = _check_disk([str(tmp_path), None])
+    assert not c.ok and "3.0 GB free" in c.message
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage(100e9, 50e9, 50e9))
+    assert _check_disk([str(tmp_path)]).ok

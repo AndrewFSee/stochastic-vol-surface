@@ -142,14 +142,19 @@ def build_snapshot(features: pd.DataFrame, forecasts: pd.DataFrame, ticker: str,
             }
     snap["volatility_forecast"] = fc_out or None
 
-    # ── Peers on the same date ───────────────────────────────────────────
+    # ── Peers on the same date: the same asset class, plus SPY as the market ─
+    from src.data.universe import group_of
+
+    group = group_of(ticker)
+    snap["asset_group"] = group
     peers = overview(features, as_of)
     snap["peers"] = [
         {"ticker": p["ticker"], "atm_30d_pct": _num(p.get("atm_30d"), V),
          "atm_30d_percentile": _pct(p, "atm_30d_pct252"),
          "risk_reversal_25d_30d_pts": _num(p.get("rr25_30d"), P),
          "variance_risk_premium_30d_pts": _num(p.get("vrp_30d"), P)}
-        for _, p in peers.iterrows() if p["ticker"] != ticker
+        for _, p in peers.iterrows()
+        if p["ticker"] != ticker and (group_of(p["ticker"]) == group or p["ticker"] == "SPY")
     ]
     return snap
 
