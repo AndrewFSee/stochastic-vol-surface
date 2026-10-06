@@ -173,6 +173,10 @@ class ScraperConfig(BaseModel):
         description="Refresh daily OHLC for the tickers (realised-vol inputs)",
     )
     features_path: str = Field(default="data/features/surface_features.parquet")
+    backup_dir: Optional[str] = Field(
+        default=None,
+        description="Copy data/ here after each run (see src.data.backup); None disables",
+    )
     build_features: bool = Field(
         default=True,
         description="Rebuild the feature table after the surfaces",

@@ -249,6 +249,36 @@ def run_collection(
             logger.exception("Forecast build failed")
             errors.append(f"Forecasts: {exc}")
 
+    # ── 7. Backup ─────────────────────────────────────────────────────────
+    # Last, so it captures everything this run wrote.
+    if cfg.backup_dir:
+        try:
+            from src.data.backup import backup_data
+
+            b = backup_data(Path(cfg.output_dir).parent, cfg.backup_dir)
+            logger.info("Backup: %d files copied to %s", b.files_copied, b.target)
+        except Exception as exc:
+            logger.exception("Backup failed")
+            errors.append(f"Backup: {exc}")
+
+    # ── 8. Health checks and alerts ───────────────────────────────────────
+    # Verify every stage produced today's output and the surfaces still agree
+    # with VIX; record the result and raise a desktop alert on any failure.
+    try:
+        from src.data.monitor import alert_if_failing, record, run_checks
+
+        checks = run_checks(
+            tickers=cfg.tickers, run_errors=errors, as_of=as_of,
+            options_dir=cfg.output_dir, surfaces_dir=cfg.surfaces_dir,
+            features_path=cfg.features_path, backup_dir=cfg.backup_dir,
+        )
+        record(checks, as_of, str(Path(cfg.output_dir).parent / "logs" / "health_checks.jsonl"))
+        if alert_if_failing(checks):
+            errors.append("Health: " + "; ".join(c.name for c in checks if not c.ok) + " failed")
+    except Exception as exc:
+        logger.exception("Health checks failed to run")
+        errors.append(f"Health checks: {exc}")
+
     result = ScrapeResult(
         as_of=as_of,
         tickers=cfg.tickers,

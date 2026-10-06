@@ -12,3 +12,8 @@ storage:
   options_dir: "data/options"
   surfaces_dir: "data/surfaces"
   models_dir: "data/models"
+
+# Daily incremental backup of data/ (the option chains cannot be re-downloaded).
+# Runs as the last step of the daily job; an unavailable drive raises an alert.
+backup:
+  dir: "D:/stochastic-vol-surface-backup"

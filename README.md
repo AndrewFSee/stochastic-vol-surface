@@ -117,6 +117,28 @@ skipping non-trading days via the NYSE calendar. On Windows it
 is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
 
+### Backup and alerts
+
+The last two steps of every daily run protect the data and check it:
+
+- **Backup.** `data/` is copied incrementally to the drive set in
+  `config/default.yaml` (`backup.dir`, currently
+  `D:/stochastic-vol-surface-backup`). Only new or changed files are copied,
+  and nothing is ever deleted from the backup. Afterwards the option chains,
+  which cannot be re-downloaded, are verified file for file. To restore, copy
+  `<backup>/data` back over `data/`. Run it by hand with
+  `python scripts/backup_data.py`.
+- **Health checks.** `src/data/monitor.py` verifies that the run had no
+  errors, every ticker got the latest session's chain and surface, the
+  features and forecasts are current, SPY's 30d variance swap still tracks VIX
+  (63-day daily-change correlation ≥ 0.8, mean gap ≤ 1.5 pts, latest gap
+  ≤ 3 pts), and the backup is under two days old. Results are appended to
+  `data/logs/health_checks.jsonl`. Any failure raises a Windows desktop
+  notification and a banner at the top of the dashboard, and the Quality tab
+  lists the latest results. Run the checks by hand with
+  `python scripts/check_health.py` (add `--test-notification` to test the
+  alert).
+
 ---
 
 ## Surface Corpus
