@@ -41,8 +41,9 @@ stochastic-vol-surface/
 ## Quick Start
 
 ```bash
-# 1. Install
-pip install -e ".[dev]"
+# 1. Install (exact versions from the lock file, or the latest compatible ones)
+pip install -r requirements.lock && pip install -e . --no-deps
+# pip install -e ".[dev]"
 
 # 2. Configure secrets
 cp .env.example .env
@@ -55,6 +56,8 @@ python scripts/schedule_scraper.py --once
 python scripts/backfill_rates.py --start 2026-01-01
 python scripts/backfill_underlying.py --start 2024-01-01
 python scripts/backfill_vix.py --start 2024-01-01
+python scripts/backfill_macro.py --start 2009-01-01
+python scripts/fetch_earnings.py
 
 # 5. Build the surface corpus from every stored chain
 python scripts/build_surfaces.py --report data/logs/surface_build.csv
@@ -80,13 +83,33 @@ directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 
 | Source | Module | Description |
 |---|---|---|
-| yfinance | `src/data/scraper.py` | Daily options chains (8 tickers) |
-| yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, SKEW, VVIX |
+| yfinance | `src/data/scraper.py` | Daily options chains (41 tickers, below) |
+| yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, VIX1D, SKEW, VVIX; VXN, VXD, OVX, GVZ, MOVE |
 | FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
+| FRED API | `src/data/macro.py` | Credit spreads, dollar, breakevens, real yields, financial-stress indices |
 | yfinance | `src/data/underlying.py` | Daily OHLC for the tickers (realised vol) |
-| Kaggle | `src/data/kaggle_loader.py` | Historical SPY IV dataset |
+| yfinance | `src/data/events.py` | Earnings dates (past and scheduled) for the single stocks |
+| Kaggle | `src/data/kaggle_loader.py` | Historical SPY chains: 2010–2023 (CSV) and 2024–2025 (JSON) |
 | Parquet | `src/data/storage.py` | Partitioned storage with dedup |
 | — | `src/data/health.py` | Coverage / freshness / quality reporting |
+
+**Tickers** (`config/default.yaml`), chosen for liquid listed options on yfinance:
+
+| Group | Tickers |
+|---|---|
+| US equity indices | SPY, QQQ, IWM, DIA |
+| Sectors | XLF, XLE, XLK, XLV, XLI, XLU, SMH, KRE, XBI |
+| Rates and credit | TLT, IEF, HYG, LQD |
+| International | EEM, EFA, EWZ |
+| Commodities | GLD, SLV, USO, UNG, GDX |
+| Crypto, VIX futures | IBIT, VXX |
+| Single stocks | AAPL, MSFT, NVDA, AMZN, META, GOOGL, AVGO, AMD, TSLA, NFLX, JPM, BAC, COIN, PLTR |
+
+The first 8 (SPY, QQQ, IWM, GLD, AAPL, MSFT, TSLA, XLF) have been collected
+since Feb 2026; the rest since Oct 2026. XLY, XLP, FXI and EWJ were left out:
+their chains are too thin for a stable surface. The thinner ETFs (UNG, HYG,
+LQD, XLU, KRE) list few short-dated strikes, so their short-tenor features are
+often NaN.
 
 ### Storage layout
 
@@ -97,6 +120,8 @@ data/
 ├── vix/vix_{D}.parquet                          # rolling 5-day snapshots
 │   └── vix_history.parquet                      # consolidated series
 ├── rates/rates_history.parquet                  # merged FRED curve
+├── macro/macro_history.parquet                  # FRED credit/macro series
+├── events/earnings.parquet                      # earnings dates per stock
 ├── underlying/prices.parquet                    # daily OHLC, (date, ticker)
 ├── features/surface_features.parquet            # one row per (ticker, date)
 ├── forecasts/vol_forecasts.parquet              # one row per (ticker, date, horizon)
@@ -116,6 +141,28 @@ underlying prices, surfaces, the feature table, then the vol forecasts —
 skipping non-trading days via the NYSE calendar. On Windows it
 is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
+
+### Backup and alerts
+
+The last two steps of every daily run protect the data and check it:
+
+- **Backup.** `data/` is copied incrementally to the drive set in
+  `config/default.yaml` (`backup.dir`, currently
+  `D:/stochastic-vol-surface-backup`). Only new or changed files are copied,
+  and nothing is ever deleted from the backup. Afterwards the option chains,
+  which cannot be re-downloaded, are verified file for file. To restore, copy
+  `<backup>/data` back over `data/`. Run it by hand with
+  `python scripts/backup_data.py`.
+- **Health checks.** `src/data/monitor.py` verifies that the run had no
+  errors, every ticker got the latest session's chain and surface, the
+  features and forecasts are current, SPY's 30d variance swap still tracks VIX
+  (63-day daily-change correlation ≥ 0.8, mean gap ≤ 1.5 pts, latest gap
+  ≤ 3 pts), and the backup is under two days old. Results are appended to
+  `data/logs/health_checks.jsonl`. Any failure raises a Windows desktop
+  notification and a banner at the top of the dashboard, and the Quality tab
+  lists the latest results. Run the checks by hand with
+  `python scripts/check_health.py` (add `--test-notification` to test the
+  alert).
 
 ---
 
@@ -198,7 +245,11 @@ is measurement noise.
 `data/features/surface_features.parquet` is the project's main output: one
 point-in-time row per (ticker, trading date), for the dashboard and for
 downstream models. `scripts/build_features.py` rebuilds it in full from the
-surface, price and VIX stores, and the daily run does the same.
+surface, price, VIX and macro stores, and the daily run does the same. The
+per-surface features are cached in `data/features/_surface_rows_cache.parquet`
+keyed by each surface file's modification time, so a daily rebuild only reads
+new or rebuilt surfaces (about 20 s instead of 3 min); `--no-cache` recomputes
+everything. The cache is discarded when `FEATURE_VERSION` changes.
 
 ```python
 from src.features import load_feature_table
@@ -221,9 +272,19 @@ ones.
 | Carry | `fwd_carry_1y` | ln(F/S)/T: rate − dividend − borrow. Level only; daily changes are mostly noise |
 | Realised | `ret_{1,5,21}d`, `rv_cc_{10,21,63}d`, `rv_yz_21d` | Zero-mean close-to-close and Yang-Zhang |
 | Premia | `vrp_30d`, `vrp_var_30d` | ATM − RV in vol; VS² − RV² in variance |
-| Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vvix`, `mkt_skew` | Same for every ticker |
+| Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vix1d`, `mkt_vvix`, `mkt_skew`, `mkt_vxn`, `mkt_vxd`, `mkt_ovx`, `mkt_gvz`, `mkt_move` | Index closes, same for every ticker. VIX1D starts in 2023 |
+| Macro | `macro_hy_oas`, `macro_ig_oas`, `macro_usd_broad`, `macro_breakeven_10y`, `macro_real_yield_10y`, `macro_stlfsi`, `macro_nfci` | FRED, joined by **publication** date (below) |
+| Earnings | `earn_next_date`, `earn_days_to`, `earn_days_since`, `earn_implied_move`, `earn_hist_move` | Single stocks only (NaN for funds); see Earnings below |
 | Dynamics | `<col>_d1`, `_d5`, `_z63`, `_pct252` | For the key columns; laid on the NYSE calendar, so a missing day is a gap, not a 2-day change |
 | Quality | `n_expiries`, `nearest_expiry_days`, `fit_rmse`, `parity_fraction` | Use to down-weight weak days |
+
+**Macro timing.** FRED dates a value by the period it describes, not the day
+it was published: the weekly NFCI for the week ending Friday appears the
+following Wednesday. `src/data/macro.py` shifts each series by its publication
+lag (1 day for the daily series, 5 for NFCI, 6 for STLFSI) before an as-of
+join, so row *t* only sees values that were public on *t*. The credit-spread
+series (HY/IG OAS) are only licensed to FRED for the last 3 years, so they are
+NaN on older historical rows.
 
 Vols are decimals (0.15 = 15%). **Nothing is extrapolated.** A feature whose
 tenor falls outside the listed expiries, or whose strike falls outside the
@@ -263,6 +324,7 @@ python scripts/backfill_kaggle.py --download --years 2018 2020 2022
 python scripts/backfill_rates.py --start 2009-01-01
 python scripts/backfill_underlying.py -t SPY --start 2009-01-01
 python scripts/backfill_vix.py --start 2009-06-01
+python scripts/backfill_macro.py --start 2009-01-01
 
 # Surfaces (parallel; 2010–2023 takes about 45 minutes on 7 workers), then features
 python scripts/build_surfaces.py --options-dir data/historical/options \
@@ -286,6 +348,37 @@ Rebuilt in October 2026 with the per-expiry builder, the 2010–2023 corpus
 variance swap has 0.969 daily-change correlation with VIX and a 0.42-pt mean
 absolute difference. On 2020-03-16 it read 82.1 against VIX's 82.7. Median fit
 error is 0.19 vol pts.
+
+### 2024–2025: full chains from a second Kaggle dataset
+
+The 2010–2023 CSV dataset stops at the end of 2023. A second free dataset,
+[S&P500 Options (SPY) Implied Volatility (2014-25)](https://www.kaggle.com/datasets/shankerabhigyan/s-and-p500-options-spy-implied-volatility-2019-24),
+has every listed SPY contract's end-of-day bid, ask, volume, open interest
+and IV, one ~1 GB JSON file per year. `scripts/backfill_kaggle_json.py`
+streams the files one trading day at a time (memory stays small) and takes
+the underlying price from the SPY close in the price store:
+
+```bash
+python scripts/backfill_kaggle_json.py --download --years 24 25   # ~5 min after download
+python scripts/build_surfaces.py -t SPY --options-dir data/historical/options \
+    --surfaces-dir data/historical/surfaces
+python scripts/build_features.py --surfaces-dir data/historical/surfaces \
+    --out data/historical/features/surface_features.parquet
+```
+
+Built with the same per-expiry builder, the 486 days (2024: 252; 2025: 234,
+the dataset skips 16 days) check out against VIX as well as the live data:
+30d variance swap vs VIX level correlation 0.999, daily-change correlation
+0.998, mean absolute difference 0.28 pts. They include the April 2025 sell-off.
+The chains take ~105 MB and the surfaces ~18 MB.
+
+With them, the historical store covers 2010–2025 (3,994 SPY days), and the
+forecaster's walk-forward track record runs through 2024–2025 out of sample.
+Over those two years it beat raw implied vol at 21 days (QLIKE 0.355 vs
+0.367; RMSE 7.5 vs 8.0 vol pts), was slightly behind at 5 days (0.332 vs
+0.322), and its 80% ranges held 80–81% of outcomes. Only 1 Jan – 18 Feb 2026 is
+still missing; none of the free sources found covers it. Paid sources with
+complete history: ORATS, ThetaData, CBOE DataShop, Polygon/Massive options.
 
 To browse the history in the dashboard, point it at the historical store:
 
@@ -363,8 +456,55 @@ walk-forward evaluation on SPY 2013–2023; `python scripts/evaluate_forecasts.p
 - In the live 2026 sample, the model beats raw implied vol on index ETFs at
   21 days, whose implied vol carries a large risk premium. On single stocks
   and GLD, raw implied vol has been as good or better, probably because it
-  prices known events such as earnings. The Forecast tab shows both track
-  records side by side.
+  prices known events such as earnings. Earnings are now modelled explicitly
+  (below), which narrows but does not close that gap. The Forecast tab shows
+  both track records side by side.
+
+### Earnings
+
+Single stocks jump on earnings, and option prices carry that jump. The
+forecaster handles it explicitly (`src/forecast/forecaster.py`,
+`src/features/earnings.py`):
+
+- **Dates** come from yfinance (`scripts/fetch_earnings.py`, refreshed by the
+  daily job). A release before the open moves that day's session; one after
+  the close moves the next. On 875 past releases the mapped session's median
+  absolute return is 4.6%, against about 1.4% on the days either side.
+- **Implied earnings move.** For an expiry after the release, ATM total
+  variance is `σ²·n + e²`: diffusion over *n* sessions plus the jump. Two
+  expiries (one before and one after the release, or the first two after it)
+  solve for `e`, with time counted in trading sessions so a weekend between
+  weekly expiries does not distort it.
+- **Forecast.** The HAR + implied model runs on ex-earnings inputs (past
+  release days dropped from realised vol, the jump stripped from implied vol)
+  and is fitted to ex-earnings variance. When a release falls in the window,
+  `252/h · e²` is added back, using the implied move where the surface gives
+  one and the stock's historical average move otherwise.
+
+`scripts/evaluate_earnings.py` writes `docs/earnings_evaluation.md`:
+
+| QLIKE (lower is better) | 5-day | 21-day |
+|---|---|---|
+| **14 stocks, 2013–2026, no options data** (~44,000 forecasts) | | |
+| HAR | 0.538 | 0.312 |
+| HAR, earnings-adjusted (historical move) | **0.406** | **0.247** |
+| … windows containing a release: HAR → adjusted | 1.771 → 0.567 | 0.385 → 0.275 |
+| **AAPL, MSFT, TSLA, Feb–Oct 2026, with options** (~6 releases) | | |
+| HAR + implied (previous production model) | 0.338 | 0.145 |
+| HAR + implied, earnings-adjusted (implied move) | **0.331** | 0.133 |
+| Implied vol alone (raw) | 0.332 | **0.114** |
+
+The long-sample gain is large and significant at both horizons
+(Diebold-Mariano p < 0.001), including windows *without* a release, because
+a past release no longer inflates the trailing realised vol. On the short
+live sample the adjusted model beats the previous one everywhere, but not
+significantly, and raw implied vol is still best at 21 days for single
+stocks. Production uses the earnings-adjusted model (`forecast/2`).
+
+The feature table carries the inputs for other models: `earn_next_date`,
+`earn_days_to`, `earn_days_since`, `earn_implied_move`, `earn_hist_move`.
+Dates for releases far ahead may have been estimates at the time; within a
+few weeks of a release they are almost always confirmed.
 
 ### Are the features useful?
 
@@ -382,6 +522,22 @@ significant predictive power:
 These are linear, one-index results. The features may still matter
 non-linearly, in combination, or across single stocks, but that needs more
 single-stock history than the live corpus has.
+
+---
+
+## Notebooks
+
+Executed notebooks that document how the models were built and tested:
+
+| Notebook | Covers |
+|---|---|
+| `notebooks/02_surface_construction.ipynb` | One day's chain to a surface: parity forwards, OTM IVs (and why not Yahoo's), per-expiry SVI, interpolation and masking. Then the surface backtest against VIX (2010–2023 and 2026), the old pipeline vs the new one, noise floors, and the rejected eSSVI fit |
+| `notebooks/03_volatility_forecasting.ipynb` | The target, the no-look-ahead walk-forward method, every model, the backtests at 5 and 21 days with significance tests and regime breakdowns, LSTM and LSTM-GARCH, the feature-usefulness tests, pooling, interval calibration and the live 2026 track record |
+
+They read from the local data stores. Rebuild and re-execute them with
+`python notebooks/_build/build.py` (15–35 minutes depending on load, mostly the LSTMs; needs
+`pip install -e ".[notebooks,experimental]"`). Cells live in
+`notebooks/_build/nb_*.py`, so changes stay readable in diffs.
 
 ---
 
@@ -442,6 +598,21 @@ pytest tests/ -v
 
 The suite is offline — every test builds its own synthetic chains in a
 temporary store, so no network access or collected data is required.
+
+**CI.** `.github/workflows/tests.yml` runs the suite on every push to `main`
+or `surface-pipeline` and on pull requests (Ubuntu, Python 3.13), installing
+from `requirements.lock`.
+
+**Lock file.** `requirements.lock` pins every runtime and dev dependency for
+Python 3.13 on any OS. Regenerate it after changing `pyproject.toml`:
+
+```bash
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.13 \
+    --no-annotate -o requirements.lock
+```
+
+Add `-c <(pip freeze)` to pin to the versions in your current environment.
+The notebook and experimental extras are not locked.
 
 > **Note:** `pyproject.toml` pins pytest's scratch space to `.pytest_tmp/`
 > inside the project. The default Windows location

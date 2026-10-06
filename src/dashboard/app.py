@@ -44,6 +44,7 @@ DATA_DIR = os.environ.get("VSS_DATA_DIR", str(_ROOT / "data"))
 FEATURES_PATH = f"{DATA_DIR}/features/surface_features.parquet"
 FORECASTS_PATH = f"{DATA_DIR}/forecasts/vol_forecasts.parquet"
 INTERPRETATIONS_DIR = f"{DATA_DIR}/interpretations"
+HEALTH_LOG = f"{DATA_DIR}/logs/health_checks.jsonl"
 SURFACES_DIR = f"{DATA_DIR}/surfaces"
 OPTIONS_DIR = f"{DATA_DIR}/options"
 
@@ -405,6 +406,15 @@ def view_forecast(t: Theme, ticker: str, as_of: pd.Timestamp, window_days) -> No
     st.caption("80% ranges: " + "  ·  ".join(
         f"{labels[h]} {D.pct(latest.loc[h, 'lo80_vol'])} – {D.pct(latest.loc[h, 'hi80_vol'])}"
         for h in (5, 21) if h in latest.index))
+    if "earnings_date" in latest and latest["earnings_date"].notna().any():
+        r = latest[latest["earnings_date"].notna()].iloc[0]
+        within = " and ".join(labels[h] for h in (5, 21)
+                              if h in latest.index and pd.notna(latest.loc[h, "earnings_date"]))
+        st.caption(
+            f"Earnings move the {pd.Timestamp(r['earnings_date']):%b %d} session, inside the "
+            f"{within} window. The forecast adds an expected earnings-day move of "
+            f"±{100 * r['earnings_move']:.1f}% (implied by the option surface where it can be "
+            "read, otherwise the stock's historical average).")
 
     h = 21 if st.segmented_control("Horizon", ["21-day", "5-day"], default="21-day",
                                    key="fc_horizon") != "5-day" else 5
@@ -558,7 +568,18 @@ def view_interpretation(feats: pd.DataFrame, ticker: str, as_of: pd.Timestamp) -
 
 def view_quality(t: Theme, feats: pd.DataFrame, ticker: str, as_of: pd.Timestamp,
                  window_days) -> None:
+    from src.data.monitor import latest_record
     from src.surface.diagnostics import benchmark_against
+
+    health = latest_record(HEALTH_LOG)
+    if health:
+        st.markdown(f"**Pipeline health** — checked {health['checked_at'][:16].replace('T', ' ')} "
+                    f"for {health['as_of']}: {'all checks passed' if health['ok'] else 'problems found'}")
+        st.dataframe(pd.DataFrame([{"Check": c["name"], "Status": "OK" if c["ok"] else "FAILED",
+                                    "Detail": c["message"]} for c in health["checks"]]),
+                     width="stretch", hide_index=True)
+    else:
+        st.caption("No health checks recorded yet; the daily job writes them after each run.")
 
     start = None if window_days is None else as_of - pd.Timedelta(days=window_days)
     spy = D.history(feats, "SPY", start, as_of)
@@ -624,6 +645,16 @@ def run_dashboard() -> None:
         return
 
     st.title("Vol Surface Dashboard")
+
+    from src.data.monitor import latest_record
+
+    health = latest_record(HEALTH_LOG)
+    if health and not health["ok"]:
+        failed = [c for c in health["checks"] if not c["ok"]]
+        st.error(f"Last health check ({health['checked_at'][:16].replace('T', ' ')}) found "
+                 f"{len(failed)} problem(s): "
+                 + "; ".join(f"**{c['name']}**: {c['message']}" for c in failed)
+                 + ". Details on the Quality tab.")
 
     # ── One filter row, scoping everything below ─────────────────────────
     tickers = sorted(feats["ticker"].unique())

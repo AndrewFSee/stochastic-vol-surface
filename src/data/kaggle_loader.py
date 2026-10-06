@@ -13,7 +13,9 @@ format used by ``src.data.storage``.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -194,4 +196,81 @@ def load_kaggle_spy_iv(filepath: str | Path) -> pd.DataFrame:
     df["implied_volatility"] = df["implied_volatility_market"]
 
     logger.info("Normalised %d rows from Kaggle dataset", len(df))
+    return df.reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Full end-of-day chains in JSON (Alpha Vantage HISTORICAL_OPTIONS format)     #
+# --------------------------------------------------------------------------- #
+# Kaggle "S&P500 Options (SPY) Implied Volatility (2014-25)" ships one JSON
+# file per year, ~1 GB each, of flat contract records with string values
+# (contractID, expiration, strike, type, bid, ask, volume, open_interest,
+# date, implied_volatility, greeks).  The layout differs by year (a list of
+# per-day lists in 2024, an object keyed by date in 2025), and the files are
+# too large to json.load at once, so they are streamed record by record.
+
+_JSON_OBJECT = re.compile(r"\{[^{}]*\}")
+
+
+def iter_json_days(path: str | Path, chunk_size: int = 1 << 24):
+    """Yield the contract records of a chain file, one list per trading day.
+
+    Matches each flat ``{...}`` record (records hold no nested objects, so
+    the enclosing lists or date-keyed object are skipped) and groups runs of
+    equal ``date``; memory stays at about one day.  Works for either layout.
+    """
+    buf = ""
+    day: list[dict] = []
+    current = None
+    with open(path, encoding="utf-8") as f:
+        while True:
+            data = f.read(chunk_size)
+            if not data:
+                break
+            buf += data
+            consumed = 0
+            for m in _JSON_OBJECT.finditer(buf):
+                rec = json.loads(m.group())
+                if day and rec.get("date") != current:
+                    yield day
+                    day = []
+                current = rec.get("date")
+                day.append(rec)
+                consumed = m.end()
+            buf = buf[consumed:]
+    if day:
+        yield day
+
+
+def normalise_json_records(records: list[dict], spot: pd.Series,
+                           ticker: str = "SPY") -> pd.DataFrame:
+    """Records of :func:`iter_json_days` in the canonical chain format.
+
+    The files carry no underlying price, so *spot* (closes indexed by date)
+    supplies it; rows on dates without a close are dropped.
+    """
+    raw = pd.DataFrame.from_records(records)
+    if raw.empty:
+        return raw
+    num = lambda c: pd.to_numeric(raw[c], errors="coerce")
+    df = pd.DataFrame({
+        "as_of": pd.to_datetime(raw["date"]),
+        "expiration": pd.to_datetime(raw["expiration"]),
+        "strike": num("strike"),
+        "option_type": raw["type"].str.lower().str.strip(),
+        "implied_volatility_market": num("implied_volatility"),
+        "bid": num("bid"),
+        "ask": num("ask"),
+        "volume": num("volume"),
+        "open_interest": num("open_interest"),
+    })
+    df["mid"] = (df["bid"] + df["ask"]) / 2
+    spot = spot.copy()
+    spot.index = pd.to_datetime(spot.index).normalize()
+    df["underlying_price"] = df["as_of"].map(spot)
+    df["T"] = (df["expiration"] - df["as_of"]).dt.days / 365.0
+    df = df[(df["T"] > 0) & df["underlying_price"].notna()
+            & df["option_type"].isin(["call", "put"])].copy()
+    df["ticker"] = ticker
+    df["implied_volatility"] = df["implied_volatility_market"]
     return df.reset_index(drop=True)

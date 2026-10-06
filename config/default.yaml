@@ -1,5 +1,14 @@
 scraper:
-  tickers: [SPY, QQQ, IWM, GLD, AAPL, MSFT, TSLA, XLF]
+  tickers: [
+    SPY, QQQ, IWM, DIA,                                  # US equity indices
+    XLF, XLE, XLK, XLV, XLI, XLU, SMH, KRE, XBI,         # sectors
+    TLT, IEF, HYG, LQD,                                  # rates and credit
+    EEM, EFA, EWZ,                                       # international
+    GLD, SLV, USO, UNG, GDX,                             # commodities
+    IBIT, VXX,                                           # crypto, VIX futures
+    AAPL, MSFT, NVDA, AMZN, META, GOOGL, AVGO, AMD,      # single stocks
+    TSLA, NFLX, JPM, BAC, COIN, PLTR,
+  ]
   schedule_time: "16:30"          # 4:30 PM ET daily
   timezone: "America/New_York"
   min_open_interest: 10
@@ -12,3 +21,8 @@ storage:
   options_dir: "data/options"
   surfaces_dir: "data/surfaces"
   models_dir: "data/models"
+
+# Daily incremental backup of data/ (the option chains cannot be re-downloaded).
+# Runs as the last step of the daily job; an unavailable drive raises an alert.
+backup:
+  dir: "D:/stochastic-vol-surface-backup"

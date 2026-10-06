@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main, surface-pipeline]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install -e . --no-deps
+
+      # The tests build their own synthetic stores and need no data/,
+      # network access or API keys.
+      - name: Run tests
+        run: pytest -q

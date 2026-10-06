@@ -33,16 +33,17 @@ logger = logging.getLogger("scheduler")
 _CFG_PATH = Path(__file__).resolve().parent.parent / "config" / "default.yaml"
 
 
-def _load_yaml_scraper_cfg() -> dict:
-    """Read the scraper section of config/default.yaml."""
+def _load_yaml() -> dict:
+    """Read config/default.yaml."""
     try:
         with open(_CFG_PATH) as f:
-            return yaml.safe_load(f).get("scraper", {})
+            return yaml.safe_load(f) or {}
     except FileNotFoundError:
         return {}
 
 
-_yaml_cfg = _load_yaml_scraper_cfg()
+_yaml_all = _load_yaml()
+_yaml_cfg = _yaml_all.get("scraper", {})
 
 
 @click.command()
@@ -92,6 +93,7 @@ def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
         build_surfaces=surfaces,
         collect_underlying=prices,
         build_features=features,
+        backup_dir=(_yaml_all.get("backup") or {}).get("dir"),
         inter_ticker_delay=_yaml_cfg.get("inter_ticker_delay", 1.5),
     )
 

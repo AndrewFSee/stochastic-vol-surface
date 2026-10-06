@@ -29,6 +29,8 @@ ENV/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+# ...except the curated, executed notebooks that document the project
+!notebooks/*.ipynb
 
 # IDE
 .vscode/

@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+from pathlib import Path
 import sys
 
 import click
@@ -32,17 +33,22 @@ logging.basicConfig(
 @click.option("--surfaces-dir", default="data/surfaces", show_default=True)
 @click.option("--underlying-dir", default="data/underlying", show_default=True)
 @click.option("--vix-dir", default="data/vix", show_default=True)
+@click.option("--macro-dir", default="data/macro", show_default=True)
+@click.option("--events-dir", default="data/events", show_default=True)
+@click.option("--no-cache", is_flag=True, help="Recompute every surface's features from scratch")
 @click.option("--out", default="data/features/surface_features.parquet", show_default=True)
 @click.option("--start", default=None, help="Start date YYYY-MM-DD")
 @click.option("--end", default=None, help="End date YYYY-MM-DD")
-def main(tickers, surfaces_dir, underlying_dir, vix_dir, out, start, end):
+def main(tickers, surfaces_dir, underlying_dir, vix_dir, macro_dir, events_dir, no_cache, out,
+         start, end):
     """Assemble and save the feature table."""
     from src.features.table import build_feature_table, save_feature_table
 
     df = build_feature_table(
         list(tickers) or None,
         surfaces_dir=surfaces_dir, underlying_dir=underlying_dir,
-        vix_dir=vix_dir, start=start, end=end,
+        vix_dir=vix_dir, macro_dir=macro_dir, events_dir=events_dir, start=start, end=end,
+        cache_path=None if no_cache else str(Path(out).parent / "_surface_rows_cache.parquet"),
     )
     if df.empty:
         click.echo(f"No surfaces with stored fits in {surfaces_dir}.", err=True)

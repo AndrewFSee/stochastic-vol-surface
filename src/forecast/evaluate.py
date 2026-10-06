@@ -142,7 +142,7 @@ def by_regime(forecasts: pd.DataFrame, regime: pd.Series) -> pd.DataFrame:
     common = forecasts.dropna()
     lab = regime.reindex(common.index)
     out = {}
-    for g, idx in common.groupby(lab).groups.items():
+    for g, idx in common.groupby(lab, observed=True).groups.items():
         sub = common.loc[idx]
         out[g] = {m: scores(sub["y"], sub[m])["qlike"] for m in common.columns if m != "y"}
         out[g]["n"] = len(sub)

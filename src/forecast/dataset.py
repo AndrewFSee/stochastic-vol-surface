@@ -14,6 +14,13 @@ One row per trading date *t*, using only information known at the close of
   until all *h* returns exist.
 * surface and market features from the feature tables (NaN where no surface
   exists, e.g. 2024–Feb 2026 for SPY).
+* earnings (single stocks; see :mod:`src.features.earnings`):
+  ``ev_day`` (*t* is an earnings session), ``ev_next`` (next one after *t*),
+  ``ev_in_<h>`` (one falls in ``(t, t+h]``), ``ev_hist_var`` (historical
+  excess event-day variance), and ex-event versions of the HAR inputs
+  (``rv_*_ex``, event days left out) and targets (``y_<h>_ex``, the
+  annualised mean squared return over the window's non-event days).  For
+  tickers without earnings these equal the plain columns.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ FEATURE_COLUMNS = [
     "rr25_30d", "bf25_30d", "rr25_91d", "atm_skew_30d", "atm_curv_30d",
     "ts_7_30", "ts_30_91", "ts_30_365", "vrp_30d",
     "mkt_vix", "mkt_vix3m", "mkt_vix9d", "mkt_vvix", "mkt_skew",
+    "earn_implied_move",
 ]
 
 DEFAULT_FEATURE_PATHS = (
@@ -88,6 +96,7 @@ def build_dataset(
     underlying_dir: str = "data/underlying",
     feature_paths: Sequence[str] = DEFAULT_FEATURE_PATHS,
     horizons: Sequence[int] = HORIZONS,
+    events_dir: str = "data/events",
 ) -> pd.DataFrame:
     """Assemble the modelling frame for *ticker* (see module docstring)."""
     from src.data.underlying import load_underlying_history
@@ -115,7 +124,54 @@ def build_dataset(
     ds["rv_m"] = dv.rolling(22, min_periods=22).mean()
     for h in horizons:
         ds[f"y_{h}"] = forward_realised_variance(ds["ret"], h)
+    _add_events(ds, dv, p, ticker, events_dir, horizons)
 
     ds = ds.join(load_features(ticker, feature_paths), how="left")
     ds.index.name = "date"
     return ds.iloc[1:]
+
+
+def _add_events(ds: pd.DataFrame, dv: pd.Series, p: pd.DataFrame, ticker: str,
+                events_dir: str, horizons: Sequence[int]) -> None:
+    """Earnings columns, in place (see module docstring)."""
+    from src.data.events import event_sessions, load_earnings
+    from src.features.earnings import calendar_columns, historical_event_variance
+    from src.features.table import trading_calendar
+
+    earnings = load_earnings(events_dir)
+    earnings = earnings[earnings["ticker"] == ticker] if not earnings.empty else earnings
+    events = pd.DatetimeIndex([])
+    sessions = None
+    if not earnings.empty:
+        sessions = trading_calendar(min(ds.index.min(), pd.Timestamp("2000-01-01")),
+                                    ds.index.max() + pd.Timedelta(days=400))
+        events = event_sessions(earnings, sessions).get(ticker, events)
+
+    is_ev = ds.index.isin(events)
+    ds["ev_day"] = is_ev
+    dv_ex = dv.where(~is_ev)
+    ds["rv_d_ex"] = dv_ex.ffill(limit=1)
+    ds["rv_w_ex"] = dv_ex.rolling(5, min_periods=4).mean()
+    ds["rv_m_ex"] = dv_ex.rolling(22, min_periods=18).mean()
+
+    sq = ds["ret"] ** 2
+    sq_ex = sq.where(~is_ev).fillna(0.0)
+    n_ex = pd.Series((~is_ev).astype(float), index=ds.index)
+    for h in horizons:
+        def fwd(x: pd.Series) -> pd.Series:
+            return x[::-1].rolling(h, min_periods=h).sum()[::-1].shift(-1)
+        complete = fwd(sq).notna()
+        ds[f"y_{h}_ex"] = (TRADING_DAYS * fwd(sq_ex) / fwd(n_ex)).where(complete)
+
+    if len(events) == 0:
+        ds["ev_next"] = pd.NaT
+        ds["ev_hist_var"] = np.nan
+        for h in horizons:
+            ds[f"ev_in_{h}"] = False
+        return
+    cal = calendar_columns(ds.index, events, sessions)
+    ds["ev_next"] = cal["earn_next_date"]
+    for h in horizons:
+        ds[f"ev_in_{h}"] = (cal["earn_days_to"] <= h).fillna(False).astype(bool)
+    close = p["adj_close"].fillna(p["close"])
+    ds["ev_hist_var"] = historical_event_variance(close, events).reindex(ds.index)
