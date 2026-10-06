@@ -84,6 +84,7 @@ directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 | Source | Module | Description |
 |---|---|---|
 | yfinance | `src/data/scraper.py` | Daily options chains (41 tickers, below) |
+| CBOE | `src/data/cboe.py` | Fallback chains (free delayed quotes) when a yfinance chain fails or is thin |
 | yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, VIX1D, SKEW, VVIX; VXN, VXD, OVX, GVZ, MOVE |
 | FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
 | FRED API | `src/data/macro.py` | Credit spreads, dollar, breakevens, real yields, financial-stress indices |
@@ -142,6 +143,20 @@ skipping non-trading days via the NYSE calendar. On Windows it
 is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
 
+**Pre-close snapshot for thin ETFs.** Market makers pull their quotes on thin
+ETF options at the 16:00 close. At 16:30 most out-of-the-money XLV options
+show a zero bid against a $0.50–$2 ask, and four tickers (XLV, HYG, LQD, EFA)
+got no surface at all on the first full run. So the tickers in
+`scraper.preclose_tickers` (`config/default.yaml`) are collected by a second
+task, `\StochasticVolSurface\PrecloseScraper`, at 15:45 ET
+(`schedule_scraper.py --preclose`, allowed only in the last half hour before
+the close). Their rows carry `snapshot = "preclose"`, and the 16:30 run keeps
+those chains instead of re-scraping, then builds their surfaces and features
+with everyone else's. If the pre-close run did not happen, the 16:30 run
+collects them as before. Their spot is about 15 minutes before the close,
+and the stored close is corrected by the next day's price refresh.
+Pre-close runs append to `data/logs/preclose_runs.jsonl`.
+
 ### Backup and alerts
 
 The last two steps of every daily run protect the data and check it:
@@ -157,7 +172,9 @@ The last two steps of every daily run protect the data and check it:
   errors, every ticker got the latest session's chain and surface, the
   features and forecasts are current, SPY's 30d variance swap still tracks VIX
   (63-day daily-change correlation ≥ 0.8, mean gap ≤ 1.5 pts, latest gap
-  ≤ 3 pts), and the backup is under two days old. Results are appended to
+  ≤ 3 pts), the backup is under two days old, and the data and backup drives
+  each have at least 5 GB free (the store grows ~4–5 GB a year with 41
+  tickers). Results are appended to
   `data/logs/health_checks.jsonl`. Any failure raises a Windows desktop
   notification and a banner at the top of the dashboard, and the Quality tab
   lists the latest results. Run the checks by hand with
@@ -252,10 +269,23 @@ new or rebuilt surfaces (about 20 s instead of 3 min); `--no-cache` recomputes
 everything. The cache is discarded when `FEATURE_VERSION` changes.
 
 ```python
-from src.features import load_feature_table
+from src.features import load_feature_table, training_frame, describe
 
 df = load_feature_table(tickers=["SPY", "QQQ"], start="2026-06-01")
+
+# Historical + live rows with forward labels over (t, t+h] sessions:
+# label_rv_<h> (realised vol), label_ret_<h> (log return),
+# label_atm30_chg_<h> (change in 30d ATM vol).
+train = training_frame(horizons=(5, 21))
+describe("rr25_30d")    # unit, meaning and when the column is NaN
 ```
+
+**Data contract.** `src/features/catalog.py` documents every column (group,
+unit, meaning, when NaN); `python scripts/feature_catalog.py` writes
+[docs/feature_catalog.md](docs/feature_catalog.md) and a machine-readable
+`docs/feature_catalog.json`. A test fails if the builder adds a column the
+catalog does not cover. Labels look into the future: never use them as
+features, and split train/test by date with a gap of at least *h* sessions.
 
 **Timing.** Row *t* uses only what was known at about 16:30 ET on *t*: that
 day's option snapshot, the underlying's close and the VIX closes. To predict
@@ -396,7 +426,9 @@ python -m streamlit run src/dashboard/app.py
 ```
 
 The dashboard reads the feature table and the per-expiry fits stored with
-each surface. It computes nothing from live market data. One filter row
+each surface. It computes nothing from live market data. Tickers are ordered
+and labelled by asset class (`src/data/universe.py`), in the picker and in
+the overview table. One filter row
 (ticker, as-of date, history window, comparison period) scopes every view:
 
 | Tab | Shows |
@@ -427,27 +459,31 @@ monthly on targets already observed, so the stored history is also the
 forecast's track record and can be used as a point-in-time ML feature.
 
 **Model: HAR + implied vol, pooled across tickers.** It was chosen by
-walk-forward evaluation on SPY 2013–2023; `python scripts/evaluate_forecasts.py
+walk-forward evaluation on SPY 2013–2025; `python scripts/evaluate_forecasts.py
 --lstm` reproduces the evaluation and writes `docs/forecast_evaluation.md`.
 
-| Model (QLIKE, lower is better; 2,399 common days) | 5-day | 21-day |
+| Model (QLIKE, lower is better; 2,683 common days) | 5-day | 21-day |
 |---|---|---|
-| HAR + implied | **0.387** | 0.430 |
-| HAR + implied + surface features | 0.386 | 0.450 |
-| Implied vol, recalibrated | 0.385 | 0.432 |
-| HAR | 0.445 | 0.426 |
-| Implied vol alone (raw) | 0.431 | **0.401** |
-| LSTM / LSTM-GARCH | 0.432 / 0.451 | 0.464 / 0.462 |
-| GARCH / GJR-GARCH | 0.492 / 0.498 | 0.435 / 0.457 |
-| Gradient boosting | 0.528 | 0.685 |
+| HAR + implied | **0.379** | 0.405 |
+| HAR + implied + surface features | 0.378 | 0.424 |
+| Implied vol, recalibrated | 0.377 | 0.406 |
+| HAR | 0.439 | 0.406 |
+| Implied vol alone (raw) | 0.420 | **0.381** |
+| LSTM / LSTM-GARCH | 0.427 / 0.437 | 0.435 / 0.425 |
+| GARCH / GJR-GARCH | 0.479 / 0.480 | 0.414 / 0.432 |
+| Gradient boosting | 0.505 | 0.635 |
 
-- At 5 days, adding implied vol beats HAR decisively (Diebold-Mariano
-  p < 0.001). At 21 days nothing beats HAR significantly on QLIKE, but
-  HAR + implied has the best RMSE and log-variance R².
+- At 5 days, HAR + implied beats HAR decisively (Diebold-Mariano
+  p < 0.001); raw implied vol does not, because its upward bias (the risk
+  premium) offsets its information. At 21 days nothing beats HAR
+  significantly on QLIKE, but HAR + implied has the best RMSE and
+  log-variance R².
 - GARCH (returns only), gradient boosting and both LSTMs do worse. The
-  LSTMs are no better than plain HAR at 5 days (p = 0.46) and significantly
-  worse than HAR + implied (p ≤ 0.02 in a direct test). With about 2,400
+  LSTMs are no better than plain HAR (p ≥ 0.37) and significantly worse than
+  HAR + implied at 5 days (p ≤ 0.02 in a direct test). With about 2,700
   overlapping daily targets, the flexible models overfit.
+- Adding the 2024–2025 data (including the April 2025 sell-off) left every
+  conclusion of the earlier 2013–2023 evaluation unchanged.
 - Inputs are each ticker's own surface: 7-day ATM vol for 5 days (14-day
   where no 7-day expiry is listed, flagged), the 30-day variance swap for 21
   days. Coefficients are pooled, because the seven tickers with only seven
@@ -503,25 +539,38 @@ stocks. Production uses the earnings-adjusted model (`forecast/2`).
 
 The feature table carries the inputs for other models: `earn_next_date`,
 `earn_days_to`, `earn_days_since`, `earn_implied_move`, `earn_hist_move`.
-Dates for releases far ahead may have been estimates at the time; within a
-few weeks of a release they are almost always confirmed.
+**Point-in-time dates.** Yahoo's history records each release's *actual*
+date, which can differ from what was scheduled weeks earlier. Every refresh
+therefore also saves the upcoming schedule to
+`data/events/snapshots/earnings_<date>.parquet`, and feature rows covered by a
+snapshot (from 6 Oct 2026) use the date scheduled at the time. Older rows use
+the actual dates; within a few weeks of a release those were almost always
+already public.
 
 ### Are the features useful?
 
-On SPY 2010–2023, beyond the implied-vol level, no surface feature adds
+On SPY 2010–2025, beyond the implied-vol level, no surface feature adds
 significant predictive power:
 
-- **Realised vol:** skew, butterfly, term structure, VVIX/SKEW and the
-  variance risk premium, added to HAR + implied one group at a time, were
-  all insignificant at both horizons (p > 0.08).
+- **Realised vol:** skew, butterfly, term structure and VVIX/SKEW, added to
+  HAR + implied one group at a time, were insignificant at both horizons
+  (p > 0.11). The variance risk premium makes 21-day forecasts significantly
+  worse (p = 0.02).
 - **Forward 21-day returns:** only implied vol survives a Bonferroni
-  correction (t = 3.6, R² 4%). The 25Δ risk reversal is nominally significant
+  correction (t = 3.9, R² 4%). The 25Δ risk reversal is nominally significant
   (p = 0.006) but not after correction.
 - **Forward variance-swap P&L:** nothing predicts it.
 
-These are linear, one-index results. The features may still matter
-non-linearly, in combination, or across single stocks, but that needs more
-single-stock history than the live corpus has.
+These are linear, one-index results. `scripts/feature_study.py` repeats the
+question for every ticker with enough history and summarises it by asset
+class ([docs/feature_study.md](docs/feature_study.md)): 17 surface, market,
+macro and earnings features against excess variance (realised over implied),
+forward return and the change in implied vol. A first run (Oct 2026, about
+130 live days for the seven non-SPY tickers) hints that on single stocks the
+30d risk reversal and ATM skew predict realised vol beyond implied (|t| > 2
+in all three stocks, R² ≈ 0.2). That is about six independent windows per
+stock, so it is a lead to re-test, not a result. Re-run the study in early
+2027.
 
 ---
 
@@ -531,8 +580,8 @@ Executed notebooks that document how the models were built and tested:
 
 | Notebook | Covers |
 |---|---|
-| `notebooks/02_surface_construction.ipynb` | One day's chain to a surface: parity forwards, OTM IVs (and why not Yahoo's), per-expiry SVI, interpolation and masking. Then the surface backtest against VIX (2010–2023 and 2026), the old pipeline vs the new one, noise floors, and the rejected eSSVI fit |
-| `notebooks/03_volatility_forecasting.ipynb` | The target, the no-look-ahead walk-forward method, every model, the backtests at 5 and 21 days with significance tests and regime breakdowns, LSTM and LSTM-GARCH, the feature-usefulness tests, pooling, interval calibration and the live 2026 track record |
+| `notebooks/02_surface_construction.ipynb` | One day's chain to a surface: parity forwards, OTM IVs (and why not Yahoo's), per-expiry SVI, interpolation and masking. Then the surface backtest against VIX (2010–2025 and 2026), the old pipeline vs the new one, noise floors, and the rejected eSSVI fit |
+| `notebooks/03_volatility_forecasting.ipynb` | The target, the no-look-ahead walk-forward method, every model, the backtests at 5 and 21 days with significance tests and regime breakdowns, LSTM and LSTM-GARCH, the feature-usefulness tests, pooling, interval calibration, the live 2026 track record, and the earnings model (timing, implied moves, the 14-stock backtest) |
 
 They read from the local data stores. Rebuild and re-execute them with
 `python notebooks/_build/build.py` (15–35 minutes depending on load, mostly the LSTMs; needs
@@ -547,7 +596,8 @@ The Interpretation tab sends a structured snapshot of the selected ticker
 and date to Claude (`claude-opus-5-5`) and shows a short written read. The
 snapshot holds levels, changes, percentiles labelled with the history behind
 them, the smile, term structure, realised vol, the forecast with its track
-record, data quality and peers.
+record, earnings (single stocks), market and credit context, data quality,
+and peers: the same asset class plus SPY.
 
 - **On demand and cached.** Nothing is sent until you press the button. Each
   result is stored in `data/interpretations/` per ticker and date, keyed by a

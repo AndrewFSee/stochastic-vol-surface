@@ -103,15 +103,20 @@ def _table(df: pd.DataFrame, label: str = "Show data") -> None:
 
 
 def view_overview(feats: pd.DataFrame, as_of: pd.Timestamp) -> None:
+    from src.data.universe import group_of, sort_tickers
+
     ov = D.overview(feats, as_of)
     if ov.empty:
         st.info("No tickers have data on or shortly before this date.")
         return
+    order = {t: i for i, t in enumerate(sort_tickers(ov["ticker"]))}
+    ov = ov.sort_values("ticker", key=lambda s: s.map(order)).reset_index(drop=True)
 
     def p(col):
         return 100 * ov[col] if col in ov else np.nan
 
     table = pd.DataFrame({
+        "Group": ov["ticker"].map(group_of),
         "Ticker": ov["ticker"],
         "Spot": ov["spot"],
         "ATM 30d": p("atm_30d"),
@@ -657,10 +662,13 @@ def run_dashboard() -> None:
                  + ". Details on the Quality tab.")
 
     # ── One filter row, scoping everything below ─────────────────────────
-    tickers = sorted(feats["ticker"].unique())
+    from src.data.universe import group_of, sort_tickers
+
+    tickers = sort_tickers(feats["ticker"].unique())
     f1, f2, f3, f4 = st.columns([1, 1, 1.4, 1.4])
     ticker = f1.selectbox("Ticker", tickers, key="ticker",
-                          index=tickers.index("SPY") if "SPY" in tickers else 0)
+                          index=tickers.index("SPY") if "SPY" in tickers else 0,
+                          format_func=lambda t: f"{t} · {group_of(t)}")
     dates = D.dates_for(feats, ticker)
     as_of = f2.selectbox("As of", dates, format_func=lambda d: str(d.date()))
     window = f3.segmented_control("History", list(WINDOWS), default="6M") or "6M"

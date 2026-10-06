@@ -140,14 +140,40 @@ def historical_event_variance(close: pd.Series, events: pd.DatetimeIndex) -> pd.
     return out.clip(lower=0.0).rename("earn_hist_var")
 
 
+def _scheduled_next(dates: pd.DatetimeIndex, snaps: pd.DataFrame,
+                    sessions: pd.DatetimeIndex) -> pd.Series:
+    """Next release session as scheduled in the latest snapshot on or before
+    each date (NaT where no snapshot covers the date)."""
+    from src.data.events import event_sessions
+
+    out = pd.Series(pd.NaT, index=dates, dtype="datetime64[ns]")
+    if snaps is None or snaps.empty:
+        return out
+    by_day = {d: event_sessions(g.assign(ticker="_"), sessions).get("_", pd.DatetimeIndex([]))
+              for d, g in snaps.groupby("snapshot_date")}
+    days = pd.DatetimeIndex(sorted(by_day))
+    pos = days.searchsorted(dates, side="right") - 1
+    for i, (dt, k) in enumerate(zip(dates, pos)):
+        if k < 0:
+            continue
+        ev = by_day[days[k]]
+        nxt = ev[ev > dt]
+        if len(nxt):
+            out.iloc[i] = nxt[0]
+    return out
+
+
 def earnings_features(
     df: pd.DataFrame,
     earnings: pd.DataFrame,
     prices: Optional[pd.DataFrame] = None,
+    snapshots: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Add the earnings columns to a feature frame with ``ticker, date`` and
     (optionally) the ``_atm_term`` JSON of each surface.
 
+    Where a schedule *snapshot* covers a date, the next release is the one
+    scheduled then (point-in-time); otherwise the actual date is used.
     Tickers without releases (funds, indices) get NaN everywhere.
     """
     from src.data.events import event_sessions
@@ -170,7 +196,16 @@ def earnings_features(
         if t not in ev or len(ev[t]) == 0:
             continue
         rows = out.loc[idx]
-        cal = calendar_columns(pd.DatetimeIndex(rows["date"]), ev[t], sessions)
+        dates = pd.DatetimeIndex(rows["date"])
+        cal = calendar_columns(dates, ev[t], sessions)
+        if snapshots is not None and not snapshots.empty:
+            sched = _scheduled_next(dates, snapshots[snapshots["ticker"] == t], sessions)
+            use = sched.notna().to_numpy()
+            if use.any():
+                cal.loc[use, "earn_next_date"] = sched[use].to_numpy()
+                pos_t = sessions.searchsorted(dates[use], side="right")
+                pos_n = sessions.searchsorted(pd.DatetimeIndex(sched[use]), side="right")
+                cal.loc[use, "earn_days_to"] = pos_n - pos_t
         out.loc[idx, "earn_next_date"] = cal["earn_next_date"].to_numpy()
         out.loc[idx, "earn_days_to"] = cal["earn_days_to"].to_numpy()
         out.loc[idx, "earn_days_since"] = cal["earn_days_since"].to_numpy()

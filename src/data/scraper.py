@@ -3,7 +3,10 @@
 Canonical columns
 -----------------
 ticker, as_of, expiration, strike, option_type, bid, ask, mid, last_price,
-volume, open_interest, implied_volatility_market, T, underlying_price
+volume, open_interest, implied_volatility_market, T, underlying_price, source
+
+``source`` is ``"yfinance"``, or ``"cboe"`` where the CBOE delayed-quotes
+fallback (:mod:`src.data.cboe`) replaced a failed or thin yfinance chain.
 """
 
 from __future__ import annotations
@@ -92,13 +95,36 @@ def _parse_yfinance_chain(ticker_str: str, as_of: date) -> pd.DataFrame:
         "T", "underlying_price",
     ]
     cols = [c for c in canonical if c in raw.columns]
-    return raw[cols].reset_index(drop=True)
+    out = raw[cols].reset_index(drop=True)
+    out["source"] = "yfinance"
+    return out
+
+
+#: Below this share of two-sided quotes a yfinance chain counts as thin.
+MIN_TWO_SIDED_SHARE = 0.6
+
+
+def _with_fallback(tkr: str, as_of: date, df: pd.DataFrame) -> pd.DataFrame:
+    """Use CBOE's chain instead when yfinance's is empty or thin and CBOE's
+    has more two-sided quotes."""
+    from src.data.cboe import fetch_cboe_chain, two_sided
+
+    n_yf = two_sided(df)
+    if not df.empty and n_yf >= MIN_TWO_SIDED_SHARE * len(df):
+        return df
+    cb = fetch_cboe_chain(tkr, as_of)
+    if two_sided(cb) > n_yf:
+        logger.warning("  → %s: yfinance chain %s (%d two-sided of %d); using CBOE (%d two-sided)",
+                       tkr, "empty" if df.empty else "thin", n_yf, len(df), two_sided(cb))
+        return cb
+    return df
 
 
 def scrape_all(
     tickers: list[str],
     as_of: Optional[date] = None,
     inter_ticker_delay: float = 1.5,
+    fallback: bool = True,
 ) -> pd.DataFrame:
     """Scrape options chains for multiple tickers.
 
@@ -110,6 +136,8 @@ def scrape_all(
         As-of date stamp; defaults to today.
     inter_ticker_delay : float
         Seconds to sleep between tickers to avoid yfinance rate-limits.
+    fallback : bool
+        Replace a failed or thin yfinance chain with CBOE's delayed quotes.
 
     Returns
     -------
@@ -125,6 +153,12 @@ def scrape_all(
         logger.info("Scraping %s (%d/%d) …", tkr, i + 1, len(tickers))
         try:
             df = _parse_yfinance_chain(tkr, as_of)
+        except Exception as exc:
+            logger.error("  → error scraping %s: %s", tkr, exc)
+            df = pd.DataFrame()
+        try:
+            if fallback:
+                df = _with_fallback(tkr, as_of, df)
             if not df.empty:
                 frames.append(df)
                 logger.info("  → %d rows for %s", len(df), tkr)

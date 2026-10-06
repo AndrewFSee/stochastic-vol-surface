@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """CLI: reproduce the volatility-forecast evaluation and write it up.
 
-Walk-forward on SPY (default 2013–2023, three years of warm-up), at 5- and
+Walk-forward on SPY (default 2013–2025, three years of warm-up), at 5- and
 21-trading-day horizons:
 
 1. every core model (implied, GARCH, GJR-GARCH, HAR, HAR + implied,
@@ -52,7 +52,7 @@ def _md(df, floatfmt=".4f") -> str:
 @click.command()
 @click.option("--ticker", default="SPY", show_default=True)
 @click.option("--start", default="2013-01-01", show_default=True, help="First forecast date")
-@click.option("--end", default="2023-12-29", show_default=True, help="Last forecast date")
+@click.option("--end", default="2025-12-31", show_default=True, help="Last forecast date")
 @click.option("--lstm", is_flag=True, help="Also run LSTM and LSTM-GARCH (slow; needs torch)")
 @click.option("--out", default="docs/forecast_evaluation.md", show_default=True)
 def main(ticker, start, end, lstm, out):
