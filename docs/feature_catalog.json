@@ -1,0 +1,850 @@
+[
+ {
+  "column": "ticker",
+  "group": "key",
+  "unit": "",
+  "description": "Underlying symbol",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "date",
+  "group": "key",
+  "unit": "date",
+  "description": "Trading date of the 16:30 ET option snapshot",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "spot",
+  "group": "surface",
+  "unit": "price",
+  "description": "Underlying price at the snapshot (close)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "atm_7d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.914
+ },
+ {
+  "column": "atm_14d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.952
+ },
+ {
+  "column": "atm_30d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "atm_60d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.994
+ },
+ {
+  "column": "atm_91d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.997
+ },
+ {
+  "column": "atm_182d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.999
+ },
+ {
+  "column": "atm_365d",
+  "group": "ATM term structure",
+  "unit": "vol (decimal)",
+  "description": "Forward-ATM implied vol at constant maturity (calendar days), interpolated in total variance",
+  "nan_when": "tenor outside the listed expiries (often 7d/14d for thin names)",
+  "non_null_live": 0.997
+ },
+ {
+  "column": "iv_p10_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.923
+ },
+ {
+  "column": "iv_p25_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.972
+ },
+ {
+  "column": "iv_c25_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.952
+ },
+ {
+  "column": "iv_c10_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.885
+ },
+ {
+  "column": "rr25_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Risk reversal: call-delta vol minus put-delta vol (negative = puts richer)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.947
+ },
+ {
+  "column": "bf25_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Butterfly: mean of the two delta-wing vols minus ATM vol (smile curvature)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.947
+ },
+ {
+  "column": "rr10_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Risk reversal: call-delta vol minus put-delta vol (negative = puts richer)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.871
+ },
+ {
+  "column": "bf10_30d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Butterfly: mean of the two delta-wing vols minus ATM vol (smile curvature)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.871
+ },
+ {
+  "column": "atm_skew_30d",
+  "group": "smile",
+  "unit": "vol per unit log-moneyness",
+  "description": "Slope dσ/dk of the smile at the money (finite difference, k = ln(K/F))",
+  "nan_when": "tenor not bracketed",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "atm_curv_30d",
+  "group": "smile",
+  "unit": "vol per unit log-moneyness²",
+  "description": "Curvature d²σ/dk² of the smile at the money",
+  "nan_when": "tenor not bracketed",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "iv_p10_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.941
+ },
+ {
+  "column": "iv_p25_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.99
+ },
+ {
+  "column": "iv_c25_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.967
+ },
+ {
+  "column": "iv_c10_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Implied vol at the 10/25-delta put (p) or call (c), forward Black delta",
+  "nan_when": "strike outside the bracketing expiries' quotes",
+  "non_null_live": 0.915
+ },
+ {
+  "column": "rr25_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Risk reversal: call-delta vol minus put-delta vol (negative = puts richer)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.964
+ },
+ {
+  "column": "bf25_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Butterfly: mean of the two delta-wing vols minus ATM vol (smile curvature)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.964
+ },
+ {
+  "column": "rr10_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Risk reversal: call-delta vol minus put-delta vol (negative = puts richer)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.904
+ },
+ {
+  "column": "bf10_91d",
+  "group": "smile",
+  "unit": "vol (decimal)",
+  "description": "Butterfly: mean of the two delta-wing vols minus ATM vol (smile curvature)",
+  "nan_when": "either wing missing",
+  "non_null_live": 0.904
+ },
+ {
+  "column": "atm_skew_91d",
+  "group": "smile",
+  "unit": "vol per unit log-moneyness",
+  "description": "Slope dσ/dk of the smile at the money (finite difference, k = ln(K/F))",
+  "nan_when": "tenor not bracketed",
+  "non_null_live": 0.997
+ },
+ {
+  "column": "atm_curv_91d",
+  "group": "smile",
+  "unit": "vol per unit log-moneyness²",
+  "description": "Curvature d²σ/dk² of the smile at the money",
+  "nan_when": "tenor not bracketed",
+  "non_null_live": 0.997
+ },
+ {
+  "column": "vs_30d",
+  "group": "variance swap",
+  "unit": "vol (decimal)",
+  "description": "Model-free variance-swap vol (VIX methodology on the fitted smiles); SPY's vs_30d tracks VIX",
+  "nan_when": "tenor not bracketed",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "vs_91d",
+  "group": "variance swap",
+  "unit": "vol (decimal)",
+  "description": "Model-free variance-swap vol (VIX methodology on the fitted smiles); SPY's vs_30d tracks VIX",
+  "nan_when": "tenor not bracketed",
+  "non_null_live": 0.997
+ },
+ {
+  "column": "ts_7_30",
+  "group": "term spreads",
+  "unit": "vol (decimal)",
+  "description": "Longer-tenor minus shorter-tenor ATM vol (positive = upward-sloping)",
+  "nan_when": "either tenor missing",
+  "non_null_live": 0.914
+ },
+ {
+  "column": "ts_30_91",
+  "group": "term spreads",
+  "unit": "vol (decimal)",
+  "description": "Longer-tenor minus shorter-tenor ATM vol (positive = upward-sloping)",
+  "nan_when": "either tenor missing",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "ts_30_365",
+  "group": "term spreads",
+  "unit": "vol (decimal)",
+  "description": "Longer-tenor minus shorter-tenor ATM vol (positive = upward-sloping)",
+  "nan_when": "either tenor missing",
+  "non_null_live": 0.976
+ },
+ {
+  "column": "fwd_carry_1y",
+  "group": "carry",
+  "unit": "per year",
+  "description": "ln(F/S)/T on the parity-forward expiry nearest 1 year: rate − dividend − borrow",
+  "nan_when": "no parity forward between 0.5 and 1.5 years",
+  "non_null_live": 0.999
+ },
+ {
+  "column": "n_expiries",
+  "group": "quality",
+  "unit": "count",
+  "description": "Expiries with an accepted SVI fit",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "nearest_expiry_days",
+  "group": "quality",
+  "unit": "days",
+  "description": "Calendar days to the nearest fitted expiry",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "fit_rmse",
+  "group": "quality",
+  "unit": "vol (decimal)",
+  "description": "Median per-expiry SVI fit error",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "parity_fraction",
+  "group": "quality",
+  "unit": "fraction",
+  "description": "Share of expiries whose forward came from put-call parity (rest: carry model)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "ret_1d",
+  "group": "realised",
+  "unit": "log return",
+  "description": "Trailing close-to-close log return (dividend-adjusted)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "ret_5d",
+  "group": "realised",
+  "unit": "log return",
+  "description": "Trailing close-to-close log return (dividend-adjusted)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "ret_21d",
+  "group": "realised",
+  "unit": "log return",
+  "description": "Trailing close-to-close log return (dividend-adjusted)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "rv_cc_10d",
+  "group": "realised",
+  "unit": "vol (decimal)",
+  "description": "Trailing zero-mean close-to-close realised vol, annualised (252)",
+  "nan_when": "fewer prices than the window",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "rv_cc_21d",
+  "group": "realised",
+  "unit": "vol (decimal)",
+  "description": "Trailing zero-mean close-to-close realised vol, annualised (252)",
+  "nan_when": "fewer prices than the window",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "rv_cc_63d",
+  "group": "realised",
+  "unit": "vol (decimal)",
+  "description": "Trailing zero-mean close-to-close realised vol, annualised (252)",
+  "nan_when": "fewer prices than the window",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "rv_yz_21d",
+  "group": "realised",
+  "unit": "vol (decimal)",
+  "description": "Trailing 21-day Yang-Zhang realised vol (uses OHLC)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "vrp_30d",
+  "group": "premia",
+  "unit": "vol (decimal)",
+  "description": "atm_30d minus rv_cc_21d",
+  "nan_when": "",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "vrp_var_30d",
+  "group": "premia",
+  "unit": "variance",
+  "description": "vs_30d² minus rv_cc_21d² (a variance swap's carry)",
+  "nan_when": "",
+  "non_null_live": 0.978
+ },
+ {
+  "column": "mkt_vix",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_vix3m",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_vix9d",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_vix1d",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_vvix",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_skew",
+  "group": "market",
+  "unit": "index points",
+  "description": "CBOE SKEW index close",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_vxn",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_vxd",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_ovx",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_gvz",
+  "group": "market",
+  "unit": "index points (vol %)",
+  "description": "CBOE volatility-index close (VIX family; VXN Nasdaq-100, VXD Dow, OVX oil, GVZ gold); same for every ticker",
+  "nan_when": "index not published that day; VIX1D starts 2023",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "mkt_move",
+  "group": "market",
+  "unit": "index points (bp vol)",
+  "description": "ICE BofA MOVE Treasury-option vol index",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_hy_oas",
+  "group": "macro",
+  "unit": "percent",
+  "description": "ICE BofA high-yield / investment-grade option-adjusted spread (FRED)",
+  "nan_when": "FRED licenses only the last 3 years",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_ig_oas",
+  "group": "macro",
+  "unit": "percent",
+  "description": "ICE BofA high-yield / investment-grade option-adjusted spread (FRED)",
+  "nan_when": "FRED licenses only the last 3 years",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_usd_broad",
+  "group": "macro",
+  "unit": "index",
+  "description": "Nominal broad US dollar index (FRED DTWEXBGS)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_breakeven_10y",
+  "group": "macro",
+  "unit": "percent",
+  "description": "10-year breakeven inflation (FRED T10YIE)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_real_yield_10y",
+  "group": "macro",
+  "unit": "percent",
+  "description": "10-year TIPS real yield (FRED DFII10)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_stlfsi",
+  "group": "macro",
+  "unit": "index (0 = average)",
+  "description": "St. Louis Fed / Chicago Fed financial-stress indices (weekly)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "macro_nfci",
+  "group": "macro",
+  "unit": "index (0 = average)",
+  "description": "St. Louis Fed / Chicago Fed financial-stress indices (weekly)",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "earn_next_date",
+  "group": "earnings",
+  "unit": "date",
+  "description": "Session the next release moves (after-close releases move the next day); point-in-time from the first schedule snapshot (Oct 2026), actual dates before",
+  "nan_when": "funds/indices; no scheduled release",
+  "non_null_live": 0.378
+ },
+ {
+  "column": "earn_days_to",
+  "group": "earnings",
+  "unit": "trading sessions",
+  "description": "Sessions in (t, earn_next_date]: 1 = the release moves tomorrow",
+  "nan_when": "funds/indices",
+  "non_null_live": 0.378
+ },
+ {
+  "column": "earn_days_since",
+  "group": "earnings",
+  "unit": "trading sessions",
+  "description": "Sessions since the last release's session (0 on that session)",
+  "nan_when": "funds/indices",
+  "non_null_live": 0.378
+ },
+ {
+  "column": "earn_implied_move",
+  "group": "earnings",
+  "unit": "log return (1 sd)",
+  "description": "One-day move implied by the ATM term structure across the next release",
+  "nan_when": "release > ~3 months out, missing expiries, or a non-positive estimate",
+  "non_null_live": 0.362
+ },
+ {
+  "column": "earn_hist_move",
+  "group": "earnings",
+  "unit": "log return (1 sd)",
+  "description": "RMS excess earnings-day move over the last 8 releases",
+  "nan_when": "fewer than 4 past releases",
+  "non_null_live": 0.378
+ },
+ {
+  "column": "atm_30d_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.926
+ },
+ {
+  "column": "atm_30d_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.893
+ },
+ {
+  "column": "atm_30d_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "atm_30d_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "atm_91d_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.949
+ },
+ {
+  "column": "atm_91d_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.916
+ },
+ {
+  "column": "atm_91d_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.852
+ },
+ {
+  "column": "atm_91d_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.852
+ },
+ {
+  "column": "vs_30d_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.926
+ },
+ {
+  "column": "vs_30d_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.893
+ },
+ {
+  "column": "vs_30d_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "vs_30d_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "rr25_30d_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.894
+ },
+ {
+  "column": "rr25_30d_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.862
+ },
+ {
+  "column": "rr25_30d_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.804
+ },
+ {
+  "column": "rr25_30d_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.808
+ },
+ {
+  "column": "bf25_30d_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.894
+ },
+ {
+  "column": "bf25_30d_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.862
+ },
+ {
+  "column": "bf25_30d_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.804
+ },
+ {
+  "column": "bf25_30d_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.808
+ },
+ {
+  "column": "ts_7_30_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.867
+ },
+ {
+  "column": "ts_7_30_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "ts_7_30_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.777
+ },
+ {
+  "column": "ts_7_30_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.777
+ },
+ {
+  "column": "ts_30_91_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.926
+ },
+ {
+  "column": "ts_30_91_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.893
+ },
+ {
+  "column": "ts_30_91_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "ts_30_91_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "vrp_30d_d1",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "One-session change on the NYSE calendar",
+  "nan_when": "previous session missing (a gap is not bridged)",
+  "non_null_live": 0.926
+ },
+ {
+  "column": "vrp_30d_d5",
+  "group": "dynamics",
+  "unit": "same as the base column",
+  "description": "Five-session change",
+  "nan_when": "t−5 missing",
+  "non_null_live": 0.893
+ },
+ {
+  "column": "vrp_30d_z63",
+  "group": "dynamics",
+  "unit": "z-score",
+  "description": "(x − trailing 63-session mean) / sd",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "vrp_30d_pct252",
+  "group": "dynamics",
+  "unit": "percentile 0–1",
+  "description": "Rank of x within the trailing 252 sessions (all history when shorter)",
+  "nan_when": "fewer than 20 observations",
+  "non_null_live": 0.836
+ },
+ {
+  "column": "builder",
+  "group": "provenance",
+  "unit": "",
+  "description": "Surface-builder version that produced the fits",
+  "nan_when": "",
+  "non_null_live": 1.0
+ },
+ {
+  "column": "feature_version",
+  "group": "provenance",
+  "unit": "",
+  "description": "Feature-table version; rows of one build share it",
+  "nan_when": "",
+  "non_null_live": 1.0
+ }
+]
