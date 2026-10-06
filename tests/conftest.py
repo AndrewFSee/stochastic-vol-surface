@@ -8,6 +8,17 @@ import pytest
 from tests.synthetic_chains import gbm_prices, make_chain
 
 
+@pytest.fixture(autouse=True)
+def _no_desktop_notifications(monkeypatch):
+    """Tests run full collection cycles whose health checks fail on purpose;
+    they must never pop up real Windows alerts."""
+    import src.data.monitor as monitor
+
+    sent = []
+    monkeypatch.setattr(monitor, "notify", lambda title, body: sent.append((title, body)) or True)
+    return sent
+
+
 @pytest.fixture
 def stores(tmp_path):
     """Options, surfaces, prices and VIX for one ticker over five days."""
