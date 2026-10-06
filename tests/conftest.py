@@ -39,4 +39,5 @@ def stores(tmp_path):
             "options_dir": str(opt),
             "surfaces_dir": str(tmp_path / "surfaces"),
             "underlying_dir": str(tmp_path / "underlying"),
-            "vix_dir": str(vix_dir), "dates": dates}
+            "vix_dir": str(vix_dir), "macro_dir": str(tmp_path / "macro"),
+            "dates": dates}

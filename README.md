@@ -55,6 +55,7 @@ python scripts/schedule_scraper.py --once
 python scripts/backfill_rates.py --start 2026-01-01
 python scripts/backfill_underlying.py --start 2024-01-01
 python scripts/backfill_vix.py --start 2024-01-01
+python scripts/backfill_macro.py --start 2009-01-01
 
 # 5. Build the surface corpus from every stored chain
 python scripts/build_surfaces.py --report data/logs/surface_build.csv
@@ -80,13 +81,32 @@ directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 
 | Source | Module | Description |
 |---|---|---|
-| yfinance | `src/data/scraper.py` | Daily options chains (8 tickers) |
-| yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, SKEW, VVIX |
+| yfinance | `src/data/scraper.py` | Daily options chains (41 tickers, below) |
+| yfinance | `src/data/vix_family.py` | VIX, VIX3M, VIX9D, VIX1D, SKEW, VVIX; VXN, VXD, OVX, GVZ, MOVE |
 | FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
+| FRED API | `src/data/macro.py` | Credit spreads, dollar, breakevens, real yields, financial-stress indices |
 | yfinance | `src/data/underlying.py` | Daily OHLC for the tickers (realised vol) |
 | Kaggle | `src/data/kaggle_loader.py` | Historical SPY IV dataset |
 | Parquet | `src/data/storage.py` | Partitioned storage with dedup |
 | — | `src/data/health.py` | Coverage / freshness / quality reporting |
+
+**Tickers** (`config/default.yaml`), chosen for liquid listed options on yfinance:
+
+| Group | Tickers |
+|---|---|
+| US equity indices | SPY, QQQ, IWM, DIA |
+| Sectors | XLF, XLE, XLK, XLV, XLI, XLU, SMH, KRE, XBI |
+| Rates and credit | TLT, IEF, HYG, LQD |
+| International | EEM, EFA, EWZ |
+| Commodities | GLD, SLV, USO, UNG, GDX |
+| Crypto, VIX futures | IBIT, VXX |
+| Single stocks | AAPL, MSFT, NVDA, AMZN, META, GOOGL, AVGO, AMD, TSLA, NFLX, JPM, BAC, COIN, PLTR |
+
+The first 8 (SPY, QQQ, IWM, GLD, AAPL, MSFT, TSLA, XLF) have been collected
+since Feb 2026; the rest since Oct 2026. XLY, XLP, FXI and EWJ were left out:
+their chains are too thin for a stable surface. The thinner ETFs (UNG, HYG,
+LQD, XLU, KRE) list few short-dated strikes, so their short-tenor features are
+often NaN.
 
 ### Storage layout
 
@@ -97,6 +117,7 @@ data/
 ├── vix/vix_{D}.parquet                          # rolling 5-day snapshots
 │   └── vix_history.parquet                      # consolidated series
 ├── rates/rates_history.parquet                  # merged FRED curve
+├── macro/macro_history.parquet                  # FRED credit/macro series
 ├── underlying/prices.parquet                    # daily OHLC, (date, ticker)
 ├── features/surface_features.parquet            # one row per (ticker, date)
 ├── forecasts/vol_forecasts.parquet              # one row per (ticker, date, horizon)
@@ -220,7 +241,11 @@ is measurement noise.
 `data/features/surface_features.parquet` is the project's main output: one
 point-in-time row per (ticker, trading date), for the dashboard and for
 downstream models. `scripts/build_features.py` rebuilds it in full from the
-surface, price and VIX stores, and the daily run does the same.
+surface, price, VIX and macro stores, and the daily run does the same. The
+per-surface features are cached in `data/features/_surface_rows_cache.parquet`
+keyed by each surface file's modification time, so a daily rebuild only reads
+new or rebuilt surfaces (about 20 s instead of 3 min); `--no-cache` recomputes
+everything. The cache is discarded when `FEATURE_VERSION` changes.
 
 ```python
 from src.features import load_feature_table
@@ -243,9 +268,18 @@ ones.
 | Carry | `fwd_carry_1y` | ln(F/S)/T: rate − dividend − borrow. Level only; daily changes are mostly noise |
 | Realised | `ret_{1,5,21}d`, `rv_cc_{10,21,63}d`, `rv_yz_21d` | Zero-mean close-to-close and Yang-Zhang |
 | Premia | `vrp_30d`, `vrp_var_30d` | ATM − RV in vol; VS² − RV² in variance |
-| Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vvix`, `mkt_skew` | Same for every ticker |
+| Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vix1d`, `mkt_vvix`, `mkt_skew`, `mkt_vxn`, `mkt_vxd`, `mkt_ovx`, `mkt_gvz`, `mkt_move` | Index closes, same for every ticker. VIX1D starts in 2023 |
+| Macro | `macro_hy_oas`, `macro_ig_oas`, `macro_usd_broad`, `macro_breakeven_10y`, `macro_real_yield_10y`, `macro_stlfsi`, `macro_nfci` | FRED, joined by **publication** date (below) |
 | Dynamics | `<col>_d1`, `_d5`, `_z63`, `_pct252` | For the key columns; laid on the NYSE calendar, so a missing day is a gap, not a 2-day change |
 | Quality | `n_expiries`, `nearest_expiry_days`, `fit_rmse`, `parity_fraction` | Use to down-weight weak days |
+
+**Macro timing.** FRED dates a value by the period it describes, not the day
+it was published: the weekly NFCI for the week ending Friday appears the
+following Wednesday. `src/data/macro.py` shifts each series by its publication
+lag (1 day for the daily series, 5 for NFCI, 6 for STLFSI) before an as-of
+join, so row *t* only sees values that were public on *t*. The credit-spread
+series (HY/IG OAS) are only licensed to FRED for the last 3 years, so they are
+NaN on older historical rows.
 
 Vols are decimals (0.15 = 15%). **Nothing is extrapolated.** A feature whose
 tenor falls outside the listed expiries, or whose strike falls outside the
@@ -285,6 +319,7 @@ python scripts/backfill_kaggle.py --download --years 2018 2020 2022
 python scripts/backfill_rates.py --start 2009-01-01
 python scripts/backfill_underlying.py -t SPY --start 2009-01-01
 python scripts/backfill_vix.py --start 2009-06-01
+python scripts/backfill_macro.py --start 2009-01-01
 
 # Surfaces (parallel; 2010–2023 takes about 45 minutes on 7 workers), then features
 python scripts/build_surfaces.py --options-dir data/historical/options \

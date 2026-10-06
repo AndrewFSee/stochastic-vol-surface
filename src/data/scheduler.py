@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -192,6 +193,14 @@ def run_collection(
             logger.warning("Rates collection failed (FRED_API_KEY set?): %s", exc)
             errors.append(f"Rates: {exc}")
 
+    # ── 3a. Macro and credit series (FRED) ────────────────────────────────
+    if cfg.collect_macro:
+        try:
+            _collect_macro(as_of, cfg.macro_dir)
+        except Exception as exc:
+            logger.warning("Macro collection failed (FRED_API_KEY set?): %s", exc)
+            errors.append(f"Macro: {exc}")
+
     # ── 3b. Underlying prices ─────────────────────────────────────────────
     if cfg.collect_underlying:
         try:
@@ -223,6 +232,8 @@ def run_collection(
             feats = build_feature_table(
                 cfg.tickers, surfaces_dir=cfg.surfaces_dir,
                 underlying_dir=cfg.underlying_dir, vix_dir=cfg.vix_dir,
+                macro_dir=cfg.macro_dir,
+                cache_path=str(Path(cfg.features_path).parent / "_surface_rows_cache.parquet"),
             )
             if feats.empty:
                 errors.append("Features: no rows built")
@@ -362,6 +373,15 @@ def _collect_rates(as_of: date, rates_dir: str) -> dict[str, float]:
             for col in df.columns if pd.notna(latest[col])}
 
 
+def _collect_macro(as_of: date, macro_dir: str) -> None:
+    """Refresh the trailing two months of FRED macro series into the history."""
+    from src.data.macro import fetch_macro, save_macro_history
+
+    df = fetch_macro(start=(as_of - timedelta(days=60)).isoformat())
+    if not df.empty:
+        save_macro_history(df, macro_dir)
+
+
 def _collect_underlying(cfg: ScraperConfig) -> int:
     """Refresh the trailing month of daily OHLC into the price history.
 
@@ -387,6 +407,7 @@ def _build_surfaces(as_of: date, cfg: ScraperConfig) -> dict[str, int]:
         options_dir=cfg.output_dir,
         surfaces_dir=cfg.surfaces_dir,
         progress=False,
+        workers=max(1, min(len(cfg.tickers), (os.cpu_count() or 2) - 1)),
     )
     return report.counts()
 

@@ -32,7 +32,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-FEATURE_VERSION = "features/1"
+FEATURE_VERSION = "features/2"
 DEFAULT_FEATURES_PATH = "data/features/surface_features.parquet"
 
 #: Columns that get changes, z-scores and percentile ranks.
@@ -45,7 +45,9 @@ PCT_WINDOW = 252
 MIN_PERIODS = 20
 
 _VIX_COLUMNS = {"VIX": "mkt_vix", "VIX3M": "mkt_vix3m", "VIX9D": "mkt_vix9d",
-                "VVIX": "mkt_vvix", "SKEW": "mkt_skew"}
+                "VIX1D": "mkt_vix1d", "VVIX": "mkt_vvix", "SKEW": "mkt_skew",
+                "VXN": "mkt_vxn", "VXD": "mkt_vxd", "OVX": "mkt_ovx", "GVZ": "mkt_gvz",
+                "MOVE": "mkt_move"}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -53,23 +55,61 @@ _VIX_COLUMNS = {"VIX": "mkt_vix", "VIX3M": "mkt_vix3m", "VIX9D": "mkt_vix9d",
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _surface_rows(ticker: str, surfaces_dir: str, start, end) -> list[dict]:
+def _surface_rows(ticker: str, surfaces_dir: str, start, end,
+                  cache: Optional[dict] = None) -> list[dict]:
+    """Surface features for every current-builder surface of *ticker*.
+
+    With a *cache* (``{(ticker, date): row}``), a surface whose file has not
+    changed since it was last computed is reused instead of re-read; any
+    rebuilt surface has a new modification time and is recomputed.
+    """
     from src.features.surface_features import surface_features
-    from src.surface.batch import load_surfaces
+    from src.surface.batch import BUILDER_VERSION, stored_builder
+    from src.surface.surface import VolSurface
 
     rows = []
-    for d, vs in load_surfaces(ticker, surfaces_dir=surfaces_dir,
-                               start=start, end=end).items():
+    tdir = Path(surfaces_dir) / f"ticker={ticker}"
+    if not tdir.exists():
+        return rows
+    for ddir in sorted(tdir.glob("date=*")):
+        dt = ddir.name.split("=", 1)[1]
+        if (start and dt < start) or (end and dt > end):
+            continue
+        fp = ddir / "surface.parquet"
+        if not fp.exists():
+            continue
+        mtime = fp.stat().st_mtime
+        hit = cache.get((ticker, dt)) if cache else None
+        if hit is not None and hit.get("_mtime") == mtime:
+            rows.append(hit)
+            continue
+        if stored_builder(fp) != BUILDER_VERSION:
+            continue
+        try:
+            vs = VolSurface.load(fp)
+        except Exception as exc:
+            logger.warning("Could not load %s: %s", fp, exc)
+            continue
         if not vs.slices:
             continue
         rows.append({
-            "ticker": ticker,
-            "date": pd.Timestamp(d),
-            "spot": float(vs.spot),
+            "ticker": ticker, "date": pd.Timestamp(dt), "spot": float(vs.spot),
             **surface_features(vs.slices, spot=vs.spot),
-            "builder": vs.builder,
+            "builder": vs.builder, "_mtime": mtime, "_fv": FEATURE_VERSION,
         })
     return rows
+
+
+def _load_row_cache(path: Optional[str]) -> dict:
+    """Cached per-surface rows from earlier builds of the same feature version."""
+    if not path or not Path(path).exists():
+        return {}
+    c = pd.read_parquet(path)
+    if "_fv" not in c:
+        return {}
+    c = c[c["_fv"] == FEATURE_VERSION]
+    return {(r["ticker"], pd.Timestamp(r["date"]).strftime("%Y-%m-%d")): r
+            for r in c.to_dict("records")}
 
 
 def fill_closes_from_snapshots(prices: pd.DataFrame, spots: pd.Series) -> pd.DataFrame:
@@ -150,24 +190,35 @@ def build_feature_table(
     surfaces_dir: str = "data/surfaces",
     underlying_dir: str = "data/underlying",
     vix_dir: str = "data/vix",
+    macro_dir: str = "data/macro",
     start: Optional[str] = None,
     end: Optional[str] = None,
+    cache_path: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Assemble the full feature table from the stores on disk."""
+    """Assemble the full feature table from the stores on disk.
+
+    *cache_path* keeps per-surface features between builds, so a daily
+    rebuild only reads the surfaces that are new or changed.
+    """
     from src.data.underlying import load_underlying_history
     from src.data.vix_family import load_vix_history
     from src.features.realized import realized_features
     from src.surface.batch import available_tickers
 
     tickers = list(tickers) if tickers else available_tickers(surfaces_dir)
+    cache = _load_row_cache(cache_path)
     rows: list[dict] = []
     for tkr in tickers:
-        r = _surface_rows(tkr, surfaces_dir, start, end)
+        r = _surface_rows(tkr, surfaces_dir, start, end, cache)
         logger.info("%-6s %d surfaces with fits", tkr, len(r))
         rows.extend(r)
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
+    if cache_path:
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache_path, index=False)
+    df = df.drop(columns=["_mtime", "_fv"], errors="ignore")
 
     # ── Realised features (computed on the full price history, then joined,
     #    so windows reach back before the first surface date) ──────────────
@@ -201,6 +252,14 @@ def build_feature_table(
         mkt = vix[[c for c in _VIX_COLUMNS if c in vix.columns]].rename(columns=_VIX_COLUMNS)
         mkt.index = pd.to_datetime(mkt.index).normalize()
         df = df.merge(mkt, left_on="date", right_index=True, how="left")
+
+    # Macro and credit series, joined by publication date (not FRED's date).
+    from src.data.macro import available_asof, load_macro_history
+
+    macro = load_macro_history(macro_dir)
+    if not macro.empty:
+        m = available_asof(macro, df["date"].unique())
+        df = df.merge(m, left_on="date", right_index=True, how="left")
 
     df = add_dynamics(df)
     df["feature_version"] = FEATURE_VERSION

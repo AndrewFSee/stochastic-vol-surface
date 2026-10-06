@@ -173,6 +173,8 @@ class ScraperConfig(BaseModel):
         description="Refresh daily OHLC for the tickers (realised-vol inputs)",
     )
     features_path: str = Field(default="data/features/surface_features.parquet")
+    macro_dir: str = Field(default="data/macro")
+    collect_macro: bool = Field(default=True, description="FRED credit/macro series; needs FRED_API_KEY")
     backup_dir: Optional[str] = Field(
         default=None,
         description="Copy data/ here after each run (see src.data.backup); None disables",

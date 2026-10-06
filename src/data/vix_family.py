@@ -1,4 +1,9 @@
-"""Download VIX-family indices from yfinance: VIX, VIX3M, VIX9D, SKEW, VVIX."""
+"""Download CBOE volatility indices from yfinance.
+
+The S&P 500 family (VIX, VIX3M, VIX9D, VIX1D, SKEW, VVIX) plus the other
+asset classes' benchmarks: VXN (Nasdaq-100), VXD (Dow), OVX (oil), GVZ
+(gold) and MOVE (Treasury bonds, ICE BofA).
+"""
 
 from __future__ import annotations
 
@@ -14,8 +19,14 @@ VIX_TICKERS: dict[str, str] = {
     "VIX":   "^VIX",
     "VIX3M": "^VIX3M",
     "VIX9D": "^VIX9D",
+    "VIX1D": "^VIX1D",   # from 2023
     "SKEW":  "^SKEW",
     "VVIX":  "^VVIX",
+    "VXN":   "^VXN",     # Nasdaq-100
+    "VXD":   "^VXD",     # Dow
+    "OVX":   "^OVX",     # crude oil (USO options)
+    "GVZ":   "^GVZ",     # gold (GLD options)
+    "MOVE":  "^MOVE",    # Treasury-bond implied vol
 }
 
 
@@ -24,7 +35,7 @@ def fetch_vix_family(
     end: Optional[str] = None,
     period: str = "5y",
 ) -> pd.DataFrame:
-    """Return a DataFrame indexed by date with columns VIX, VIX3M, VIX9D, SKEW, VVIX.
+    """Return a DataFrame indexed by date with one column per ``VIX_TICKERS`` entry.
 
     Parameters
     ----------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -213,7 +214,7 @@ def test_build_feature_table_end_to_end(stores, tmp_path):
 
     df = build_feature_table(surfaces_dir=stores["surfaces_dir"],
                              underlying_dir=stores["underlying_dir"],
-                             vix_dir=stores["vix_dir"])
+                             vix_dir=stores["vix_dir"], macro_dir=stores["macro_dir"])
     assert len(df) == 5 and not df.duplicated(["ticker", "date"]).any()
     assert df["atm_30d"].is_monotonic_increasing          # atm rose by 1 pt a day
     assert df["rv_cc_21d"].notna().all() and df["vrp_30d"].notna().all()
@@ -224,6 +225,61 @@ def test_build_feature_table_end_to_end(stores, tmp_path):
     path = save_feature_table(df, str(tmp_path / "f.parquet"))
     back = load_feature_table(str(path), start=str(stores["dates"][2]))
     assert len(back) == 3
+
+
+def test_feature_cache_recomputes_only_changed_surfaces(stores, tmp_path, monkeypatch):
+    import importlib
+    import os
+
+    from src.features.table import build_feature_table
+
+    kw = dict(surfaces_dir=stores["surfaces_dir"], underlying_dir=stores["underlying_dir"],
+              vix_dir=stores["vix_dir"], macro_dir=stores["macro_dir"],
+              cache_path=str(tmp_path / "cache.parquet"))
+    first = build_feature_table(**kw)
+
+    sf = importlib.import_module("src.features.surface_features")
+    calls = []
+    real = sf.surface_features
+    monkeypatch.setattr(sf, "surface_features", lambda *a, **k: calls.append(1) or real(*a, **k))
+    second = build_feature_table(**kw)
+    assert calls == []                      # every surface came from the cache
+    pd.testing.assert_frame_equal(first, second)
+
+    last = sorted(Path(stores["surfaces_dir"]).rglob("surface.parquet"))[-1]
+    os.utime(last, (last.stat().st_atime, last.stat().st_mtime + 10))
+    build_feature_table(**kw)
+    assert len(calls) == 1                  # only the touched surface is re-read
+
+
+def test_macro_series_join_on_publication_not_observation_date():
+    from src.data.macro import MACRO_SERIES, available_asof
+
+    lag = MACRO_SERIES["NFCI"][1]
+    obs = pd.DatetimeIndex(["2026-03-06", "2026-03-13"])     # weekly (Fridays)
+    hist = pd.DataFrame({"NFCI": [-0.5, -0.4]}, index=obs)
+    days = pd.bdate_range("2026-03-09", "2026-03-20")
+    out = available_asof(hist, days)["macro_nfci"]
+    first_pub = obs[0] + pd.Timedelta(days=lag)
+    second_pub = obs[1] + pd.Timedelta(days=lag)
+    assert out[days < first_pub].isna().all()
+    assert (out[(days >= first_pub) & (days < second_pub)] == -0.5).all()
+    assert (out[days >= second_pub] == -0.4).all()
+
+
+def test_build_feature_table_joins_macro(stores):
+    from src.data.macro import save_macro_history
+    from src.features.table import build_feature_table
+
+    d = pd.DatetimeIndex(pd.to_datetime(stores["dates"]))
+    save_macro_history(pd.DataFrame({"HY_OAS": [3.0, 3.1, 3.2, 3.3, 3.4]}, index=d),
+                       stores["macro_dir"])
+    df = build_feature_table(surfaces_dir=stores["surfaces_dir"],
+                             underlying_dir=stores["underlying_dir"],
+                             vix_dir=stores["vix_dir"], macro_dir=stores["macro_dir"])
+    # One-day publication lag: each date sees the previous day's spread.
+    assert df["macro_hy_oas"].tolist()[1:] == [3.0, 3.1, 3.2, 3.3]
+    assert np.isnan(df["macro_hy_oas"].iloc[0])
 
 
 def test_exchange_holiday_is_not_a_gap():
