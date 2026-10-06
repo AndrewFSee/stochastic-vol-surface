@@ -9,6 +9,7 @@ description = "Implied-volatility surfaces, point-in-time vol features and a das
 requires-python = ">=3.10"
 dependencies = [
     "yfinance>=0.2",
+    "lxml>=5.0",                # yfinance earnings dates
     "pandas>=2.0",
     "numpy>=2.0",               # np.trapezoid
     "scipy>=1.10",

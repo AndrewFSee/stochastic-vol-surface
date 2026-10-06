@@ -41,8 +41,9 @@ stochastic-vol-surface/
 ## Quick Start
 
 ```bash
-# 1. Install
-pip install -e ".[dev]"
+# 1. Install (exact versions from the lock file, or the latest compatible ones)
+pip install -r requirements.lock && pip install -e . --no-deps
+# pip install -e ".[dev]"
 
 # 2. Configure secrets
 cp .env.example .env
@@ -515,6 +516,21 @@ pytest tests/ -v
 
 The suite is offline — every test builds its own synthetic chains in a
 temporary store, so no network access or collected data is required.
+
+**CI.** `.github/workflows/tests.yml` runs the suite on every push to `main`
+or `surface-pipeline` and on pull requests (Ubuntu, Python 3.13), installing
+from `requirements.lock`.
+
+**Lock file.** `requirements.lock` pins every runtime and dev dependency for
+Python 3.13 on any OS. Regenerate it after changing `pyproject.toml`:
+
+```bash
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.13 \
+    --no-annotate -o requirements.lock
+```
+
+Add `-c <(pip freeze)` to pin to the versions in your current environment.
+The notebook and experimental extras are not locked.
 
 > **Note:** `pyproject.toml` pins pytest's scratch space to `.pytest_tmp/`
 > inside the project. The default Windows location
