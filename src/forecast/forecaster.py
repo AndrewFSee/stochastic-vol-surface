@@ -1,6 +1,6 @@
 """Production volatility forecasts: HAR + implied vol, pooled across tickers.
 
-Chosen by walk-forward evaluation on SPY 2013–2023 (``scripts/evaluate_forecasts.py``):
+Chosen by walk-forward evaluation on SPY 2013–2025 (``scripts/evaluate_forecasts.py``):
 HAR + implied was best or tied-best at both horizons and significantly better
 than HAR at 5 days; GARCH, gradient boosting, LSTM and LSTM-GARCH all did
 worse.  Extra surface features (skew, term structure, VVIX...) added nothing
@@ -9,7 +9,7 @@ significant beyond the implied level, so the production model leaves them out.
 * Inputs: HAR terms plus each ticker's *own* implied vol — 7-day ATM for the
   5-day horizon (14-day ATM where no 7-day expiry is listed, flagged), the
   30-day variance swap for 21 days.
-* Coefficients are pooled across tickers.  SPY's 2010–2023 history dominates
+* Coefficients are pooled across tickers.  SPY's 2010–2025 history dominates
   the pool; fitting a ticker on its own ~7 months of live data was much worse
   out of sample.
 * Built walk-forward with monthly refits, so every stored forecast — including

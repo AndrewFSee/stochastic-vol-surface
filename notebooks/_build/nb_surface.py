@@ -16,7 +16,7 @@ runs.
 3. **Implied vols** from out-of-the-money mid prices (Black-76).
 4. **An SVI smile per expiry**: fit, weighting, outlier handling.
 5. **From expiries to a surface**: interpolation in total variance, and the observed/extrapolated mask.
-6. **Validation (the backtest of the surfaces)**: SPY's 30-day variance swap against VIX, 2010–2023 and 2026, and the old pipeline against the new one.
+6. **Validation (the backtest of the surfaces)**: SPY's 30-day variance swap against VIX, 2010–2025 and 2026, and the old pipeline against the new one.
 7. **Noise floors** of the derived features.
 8. **The rejected alternative**: a joint eSSVI fit.
 
@@ -235,23 +235,32 @@ from src.surface.diagnostics import benchmark_against
 live = load_feature_table("data/features/surface_features.parquet", tickers=["SPY"])
 hist = load_feature_table("data/historical/features/surface_features.parquet", tickers=["SPY"])
 rows = {}
-for name, f in (("2010–2023 (historical, Kaggle chains)", hist), ("2026 (live, Yahoo chains)", live)):
+parts = (("2010–2023 (historical, Kaggle CSV chains)", hist[hist["date"] < "2024-01-01"]),
+         ("2024–2025 (historical, Kaggle JSON chains)", hist[hist["date"] >= "2024-01-01"]),
+         ("2026 (live, Yahoo chains)", live))
+for name, f in parts:
     s = f.set_index("date")
     rows[name] = benchmark_against(100 * s["vs_30d"], s["mkt_vix"])
 pd.DataFrame(rows).T[["n", "level_corr", "change_corr", "mean_diff", "mean_abs_diff"]].round(3)
 """),
 ("code", r"""
 h = hist.set_index("date")
-fig, axes = plt.subplots(1, 2, figsize=(12, 3.8), gridspec_kw={"width_ratios": [2.2, 1]})
+fig, axes = plt.subplots(1, 3, figsize=(13, 3.8), gridspec_kw={"width_ratios": [2.2, 1, 1]})
 ax = axes[0]
 ax.plot(h.index, h["mkt_vix"], color=T.series[1], lw=1.2, label="VIX (CBOE)")
 ax.plot(h.index, 100 * h["vs_30d"], color=T.series[0], lw=1.2, label="SPY 30d variance swap (ours)")
-style_axes(ax, "2010–2023", None, "Vol (%)"); ax.legend(frameon=False)
+style_axes(ax, "2010–2025", None, "Vol (%)"); ax.legend(frameon=False)
 z = h.loc["2020-02-15":"2020-04-30"]
 ax = axes[1]
 ax.plot(z.index, z["mkt_vix"], color=T.series[1], lw=2, label="VIX")
 ax.plot(z.index, 100 * z["vs_30d"], color=T.series[0], lw=2, label="ours")
 style_axes(ax, "Zoom: the March 2020 crash", None, None)
+ax.tick_params(axis="x", rotation=30)
+z = h.loc["2025-03-20":"2025-05-15"]
+ax = axes[2]
+ax.plot(z.index, z["mkt_vix"], color=T.series[1], lw=2, label="VIX")
+ax.plot(z.index, 100 * z["vs_30d"], color=T.series[0], lw=2, label="ours")
+style_axes(ax, "Zoom: the April 2025 sell-off", None, None)
 ax.tick_params(axis="x", rotation=30)
 plt.tight_layout(); plt.show()
 """),
@@ -380,8 +389,8 @@ trading noise for a systematic bias. It was not adopted.
   and **tangent wings**. Extrapolated cells are flagged and never used as
   features.
 - Validated against VIX: **0.97–0.98 daily-change correlation** and a
-  **0.3–0.4 vol-point** mean gap, over 2010–2023 (including March 2020)
-  and 2026.
+  **0.3–0.4 vol-point** mean gap, over 2010–2025 (including March 2020
+  and April 2025) and 2026.
 - Remaining noise is mostly far below bid-ask. The exception is the
   single-stock 30-day risk reversal; use its 5-day changes or smooth it.
 """),

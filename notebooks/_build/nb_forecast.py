@@ -45,7 +45,7 @@ from src.forecast.evaluate import (compare, by_regime, walk_forward, scores, qli
                                    diebold_mariano, predictive_regression)
 from src.forecast import models as M
 
-START, END = "2013-01-01", "2023-12-29"   # out-of-sample span; 2010-2012 is warm-up
+START, END = "2013-01-01", "2025-12-31"   # out-of-sample span; 2010-2012 is warm-up
 """),
 ("md", r"""
 ## 1. The target and the data
@@ -60,7 +60,7 @@ Each row joins the inputs the models can see:
 - HAR inputs: daily, weekly and monthly averages of a daily variance estimate
   (below);
 - the surface and VIX-family features from the feature tables. SPY has them
-  for 2010–2023 (historical) and 2026 (live).
+  for 2010–2025 (historical) and 2026 (live).
 """),
 ("code", r"""
 ds = build_dataset("SPY")
@@ -69,7 +69,7 @@ print("surface-feature coverage by year:",
       ds["vs_30d"].notna().groupby(ds.index.year).mean().round(2).to_dict())
 
 fig, ax = plt.subplots(figsize=(12, 3.6))
-s = ds.loc["2010":"2023"]
+s = ds.loc["2010":"2025"]
 ax.plot(s.index, 100 * np.sqrt(s["y_21"]), color=T.series[2], lw=1, label="realised over the next 21 days")
 ax.plot(s.index, 100 * s["vs_30d"], color=T.series[1], lw=1, label="30d implied (variance swap) at the time")
 style_axes(ax, "SPY: implied vol vs the volatility that followed", None, "Annualised vol (%)")
@@ -96,7 +96,7 @@ cmp.round(4)
 ("md", r"""
 ## 2. The method: walk-forward, with no look-ahead
 
-Forecasts for 2013–2023 are made walk-forward. Every 21 trading days each
+Forecasts for 2013–2025 are made walk-forward. Every 21 trading days each
 model is refitted on the data available at that point, then forecasts the
 next block.
 
@@ -167,9 +167,11 @@ plt.tight_layout(); plt.show()
 `dm_stat` compares each model with HAR (positive means better). How to read
 the tables:
 
-- **5 days:** every model that uses implied vol beats HAR decisively
-  (p < 0.002). The market's short-dated implied vol carries real information
-  about next week.
+- **5 days:** HAR + implied and recalibrated implied vol beat HAR
+  decisively (p < 0.001). The market's short-dated implied vol carries real
+  information about next week. Raw implied vol does not beat HAR
+  significantly: its upward bias (the risk premium) costs about as much as
+  its information gains.
 - **21 days:** no model beats HAR significantly on QLIKE. Raw implied vol
   has the lowest QLIKE because QLIKE punishes under-forecasts and implied vol
   runs high, but it is biased by about 3 vol points. HAR + implied has the
@@ -217,8 +219,9 @@ for h in (5, 21):
     display(pd.DataFrame(rows).set_index("model").round(4))
 """),
 ("md", r"""
-Both deep models lose to HAR + implied, significantly at 5 days. With about
-2,500 overlapping daily observations, a network has little signal to learn
+Both deep models lose to HAR + implied, significantly at 5 days
+(p ≈ 0.02 and 0.01) and insignificantly at 21. With about 2,700 overlapping
+daily observations, a network has little signal to learn
 from beyond what HAR's three averages and implied vol already capture. The
 extra flexibility mostly fits noise.
 
@@ -270,13 +273,12 @@ for h in (5, 21):
     print(f"h={h}"); display(abl[["qlike", "r2_log", "dm_stat", "dm_p"]].round(4))
 """),
 ("md", r"""
-No group adds anything significant beyond the implied-vol level (all
-p > 0.08). At 21 days, the variance risk premium makes forecasts slightly
-worse.
+No group adds anything significant beyond the implied-vol level. At 21
+days, adding the variance risk premium makes forecasts significantly worse.
 
 ### For other targets
 
-Single-feature predictive regressions, 2010–2023, with Newey-West t-stats
+Single-feature predictive regressions, 2010–2025, with Newey-West t-stats
 for the 21-day overlap and a Bonferroni correction across the 20 tests:
 """),
 ("code", r"""
@@ -299,7 +301,7 @@ higher implied vol has been followed by higher returns, a risk-premium or
 rebound effect that 2020 probably drives. Nothing predicts the payoff from
 selling volatility.
 
-**Conclusion:** on SPY 2010–2023, the implied-vol level is the useful
+**Conclusion:** on SPY 2010–2025, the implied-vol level is the useful
 feature. Skew, butterfly and term-structure features add no robust linear
 predictive power for these targets. They may still matter non-linearly, in
 combination, or across single stocks, but testing that needs more
@@ -385,12 +387,121 @@ track.round(3)
   history to fit a separate single-stock model reliably; the dashboard shows
   both track records side by side instead.
 
+"""),
+("md", r"""
+## 7. Earnings: pricing the known event
+
+Single stocks jump on earnings. The production model handles releases
+explicitly (`src/forecast/forecaster.py`, `src/features/earnings.py`):
+
+- **Timing.** A release before the open moves that day's session; one after
+  the close moves the next.
+- **Implied move.** For an expiry after the release, ATM total variance is
+  `σ²·n + e²`: diffusion over *n* sessions plus the jump variance. Two
+  expiries (one before and one after, or the first two after) solve for `e`.
+- **Forecast.** HAR + implied runs on ex-earnings inputs and is fitted to
+  ex-earnings variance; `252/h · e²` is added back when a release falls in
+  the window, using the implied move where the surface gives one and the
+  stock's historical average otherwise.
+
+First, the mapping: the session a release is mapped to should carry by far
+the largest move.
+"""),
+("code", r"""
+from src.data.events import load_earnings, event_sessions
+from src.data.underlying import load_underlying_history
+from src.features.table import trading_calendar
+
+earn = load_earnings()
+cal = trading_calendar(pd.Timestamp("2009-01-01"), pd.Timestamp("2027-12-31"))
+ev = event_sessions(earn, cal)
+px = load_underlying_history("data/underlying")
+moves = []
+for t, sess in ev.items():
+    r = np.log(px.xs(t, level="ticker")["adj_close"].dropna()).diff().abs()
+    for d in sess:
+        if d in r.index:
+            i = r.index.get_loc(d)
+            if 1 <= i < len(r) - 1:
+                moves.append((t, r.iloc[i - 1], r.iloc[i], r.iloc[i + 1]))
+moves = pd.DataFrame(moves, columns=["ticker", "day before", "event session", "day after"])
+print(f"{len(moves)} releases across {moves.ticker.nunique()} stocks; median absolute move (%):")
+(100 * moves[["day before", "event session", "day after"]].median()).round(2)
+"""),
+("md", r"""
+### The long-sample backtest (no options data needed)
+
+Fourteen stocks, 2013 onwards, pooled, walk-forward with monthly refits.
+Without surfaces before 2026 this compares plain HAR with HAR on
+ex-earnings inputs plus each stock's *historical* average earnings move.
+Takes a few minutes.
+"""),
+("code", r"""
+from src.forecast.forecaster import build_forecasts
+
+stocks = sorted(earn["ticker"].unique())
+t0 = time.time()
+har_fc = build_forecasts(stocks, use_implied=False, event_adjusted=False)
+ev_fc = build_forecasts(stocks, use_implied=False, event_adjusted=True)
+print(f"{len(ev_fc):,} forecasts ({time.time() - t0:.0f}s)")
+
+rows = []
+for h in (5, 21):
+    a = har_fc[har_fc.horizon == h].set_index(["ticker", "date"])
+    b = ev_fc[ev_fc.horizon == h].set_index(["ticker", "date"])
+    idx = a.index.intersection(b.index)
+    a, b = a.loc[idx], b.loc[idx]
+    ok = b["realised_vol"].notna()
+    y = b.loc[ok, "realised_vol"] ** 2
+    la = qlike_series(y, a.loc[ok, "forecast_vol"] ** 2)
+    lb = qlike_series(y, b.loc[ok, "forecast_vol"] ** 2)
+    inwin = b.loc[ok, "earnings_in_window"].astype(bool)
+    for name, m in (("all", slice(None)), ("release in window", inwin), ("no release", ~inwin)):
+        d = (la[m] - lb[m]).groupby(level="date").mean()
+        stat, p = diebold_mariano(d, pd.Series(0.0, index=d.index), h)
+        rows.append({"horizon": h, "windows": name, "n": int(la[m].size),
+                     "HAR": la[m].mean(), "HAR, earnings-adjusted": lb[m].mean(),
+                     "DM stat": stat, "p": p})
+pd.DataFrame(rows).set_index(["horizon", "windows"]).round(4)
+"""),
+("md", r"""
+The adjustment helps everywhere, most in windows that contain a release,
+and also in windows that don't: a past release no longer inflates the
+trailing realised vol the model reads.
+
+### Implied move vs what happened, 2026
+
+The live surfaces give the market's implied move for each release. The
+realised move is one draw, so it should land within about ±2 implied
+standard deviations most of the time:
+"""),
+("code", r"""
+feats = pd.read_parquet("data/features/surface_features.parquet")
+pre = feats[(feats["earn_days_to"] == 1) & feats["earn_implied_move"].notna()]
+out = []
+for _, r in pre.iterrows():
+    rr = np.log(px.xs(r.ticker, level="ticker")["adj_close"]).diff()
+    if r.earn_next_date in rr.index:
+        out.append({"ticker": r.ticker, "session": r.earn_next_date.date(),
+                    "implied move %": 100 * r.earn_implied_move,
+                    "historical avg %": 100 * r.earn_hist_move,
+                    "realised %": 100 * rr[r.earn_next_date]})
+im = pd.DataFrame(out)
+im["realised / implied"] = im["realised %"].abs() / im["implied move %"]
+im.round(2)
+"""),
+("md", r"""
+Few releases have both a live surface and a closed outcome yet, so this is
+a sanity check, not a test. Four of the six realised moves were within 1.6
+implied standard deviations; MSFT and TSLA in July 2026 moved about 2.5,
+the kind of tail that event jumps produce.
+
 ## Summary
 
 | Question | Answer |
 |---|---|
 | Best model | HAR + implied vol: best or tied-best at both horizons, significantly better than HAR at 5 days |
-| GARCH / boosting / LSTM / LSTM-GARCH | all worse; the flexible models overfit about 2,500 overlapping observations |
+| GARCH / boosting / LSTM / LSTM-GARCH | all worse; the flexible models overfit about 2,700 overlapping observations |
 | Surface features beyond implied vol | no significant forecasting value; nothing robustly predicts returns or variance-swap P&L |
 | Production setup | pooled across tickers, monthly walk-forward refits, 80% ranges calibrated |
 | Known weakness | single stocks around known events, where implied vol is as good or better |
