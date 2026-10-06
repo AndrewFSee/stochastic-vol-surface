@@ -152,3 +152,45 @@ def test_loaded_frame_is_storable(tmp_path):
 
     back = load_options_chain("SPY", base_dir=str(store))
     assert len(back) == len(df)
+
+
+# ── Streamed JSON chains (2024–2025 backfill) ────────────────────────────────
+
+
+def _json_record(date, exp, strike, kind, bid, ask):
+    return {"contractID": f"SPY{kind}{strike}", "symbol": "SPY", "expiration": exp,
+            "strike": f"{strike:.2f}", "type": kind, "bid": f"{bid:.2f}", "ask": f"{ask:.2f}",
+            "volume": "10", "open_interest": "5", "date": date, "implied_volatility": "0.2"}
+
+
+@pytest.mark.parametrize("layout", ["lists", "by_date"])
+@pytest.mark.parametrize("chunk_size", [7, 64, 1 << 20])
+def test_json_days_stream_across_chunk_boundaries(tmp_path, chunk_size, layout):
+    import json
+
+    from src.data.kaggle_loader import iter_json_days
+
+    days = [[_json_record(d, "2024-02-16", k, t, 1.0, 1.1)
+             for k in (480, 490) for t in ("call", "put")]
+            for d in ("2024-01-02", "2024-01-03", "2024-01-04")]
+    p = tmp_path / "chains.json"
+    # 2024 file: a list of per-day lists; 2025 file: an object keyed by date,
+    # with empty lists on holidays.
+    body = days if layout == "lists" else {"2024-01-01": [], **{d[0]["date"]: d for d in days}}
+    p.write_text(json.dumps(body), encoding="utf-8")
+    got = list(iter_json_days(p, chunk_size=chunk_size))
+    assert got == days
+
+
+def test_json_records_get_spot_from_closes_and_canonical_columns():
+    from src.data.kaggle_loader import normalise_json_records
+
+    recs = [_json_record("2024-01-02", "2024-02-16", 480, "call", 9.0, 9.2),
+            _json_record("2024-01-02", "2024-02-16", 480, "put", 2.0, 2.1),
+            _json_record("2024-01-03", "2024-02-16", 480, "put", 2.0, 2.1)]   # no close
+    spot = pd.Series([475.3], index=pd.to_datetime(["2024-01-02"]))
+    df = normalise_json_records(recs, spot)
+    assert len(df) == 2 and (df["underlying_price"] == 475.3).all()
+    assert df["mid"].tolist() == pytest.approx([9.1, 2.05])
+    assert df["T"].iloc[0] == pytest.approx(45 / 365)
+    assert set(df["option_type"]) == {"call", "put"} and (df["ticker"] == "SPY").all()
