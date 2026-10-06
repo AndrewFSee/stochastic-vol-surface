@@ -370,7 +370,13 @@ Built with the same per-expiry builder, the 486 days (2024: 252; 2025: 234,
 the dataset skips 16 days) check out against VIX as well as the live data:
 30d variance swap vs VIX level correlation 0.999, daily-change correlation
 0.998, mean absolute difference 0.28 pts. They include the April 2025 sell-off.
-The chains take ~105 MB and the surfaces ~18 MB. Only 1 Jan – 18 Feb 2026 is
+The chains take ~105 MB and the surfaces ~18 MB.
+
+With them, the historical store covers 2010–2025 (3,994 SPY days), and the
+forecaster's walk-forward track record runs through 2024–2025 out of sample.
+Over those two years it beat raw implied vol at 21 days (QLIKE 0.355 vs
+0.367; RMSE 7.5 vs 8.0 vol pts), was slightly behind at 5 days (0.332 vs
+0.322), and its 80% ranges held 80–81% of outcomes. Only 1 Jan – 18 Feb 2026 is
 still missing; none of the free sources found covers it. Paid sources with
 complete history: ORATS, ThetaData, CBOE DataShop, Polygon/Massive options.
 
