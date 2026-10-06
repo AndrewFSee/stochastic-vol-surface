@@ -10,6 +10,7 @@ Usage:
     python scripts/schedule_scraper.py --time 17:00   # 5:00 PM ET
     python scripts/schedule_scraper.py --once          # run once immediately then exit
     python scripts/schedule_scraper.py --no-vix        # skip VIX family
+    python scripts/schedule_scraper.py --preclose      # thin ETFs only, 15:30-16:00 ET
 
 Runs forever (Ctrl+C to stop).  Designed to be launched via:
     - Task Scheduler (Windows)
@@ -68,10 +69,12 @@ _yaml_cfg = _yaml_all.get("scraper", {})
 @click.option("--features/--no-features", default=True, show_default=True,
               help="Rebuild the feature table after the surfaces")
 @click.option("--once", is_flag=True, help="Run once immediately then exit")
+@click.option("--preclose", is_flag=True,
+              help="Collect only the pre-close tickers (run at ~15:45 ET), then exit")
 @click.option("--force", is_flag=True,
               help="Collect even before the options close (stores intraday quotes as the close)")
 def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
-         prices, features, once, force):
+         prices, features, once, preclose, force):
     """Launch the daily data-collection scheduler (options + VIX + rates + surfaces)."""
     try:
         from dotenv import load_dotenv
@@ -95,7 +98,17 @@ def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
         build_features=features,
         backup_dir=(_yaml_all.get("backup") or {}).get("dir"),
         inter_ticker_delay=_yaml_cfg.get("inter_ticker_delay", 1.5),
+        preclose_tickers=_yaml_cfg.get("preclose_tickers") or [],
     )
+
+    if preclose:
+        from src.data.scheduler import run_preclose
+
+        result = run_preclose(cfg, force=force)
+        click.echo(f"Pre-close: {result.total_rows:,} rows -> {result.partitions_written} partitions")
+        if result.errors:
+            click.echo(f"  Errors: {result.errors}", err=True)
+        return
 
     if once:
         click.echo(f"Running single collection for {cfg.tickers} …")

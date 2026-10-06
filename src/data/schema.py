@@ -173,6 +173,10 @@ class ScraperConfig(BaseModel):
         description="Refresh daily OHLC for the tickers (realised-vol inputs)",
     )
     features_path: str = Field(default="data/features/surface_features.parquet")
+    preclose_tickers: list[str] = Field(
+        default_factory=list,
+        description="Thin tickers collected before the close (their quotes vanish at 16:00)",
+    )
     macro_dir: str = Field(default="data/macro")
     collect_macro: bool = Field(default=True, description="FRED credit/macro series; needs FRED_API_KEY")
     events_dir: str = Field(default="data/events")

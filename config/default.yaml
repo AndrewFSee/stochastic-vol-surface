@@ -9,6 +9,9 @@ scraper:
     AAPL, MSFT, NVDA, AMZN, META, GOOGL, AVGO, AMD,      # single stocks
     TSLA, NFLX, JPM, BAC, COIN, PLTR,
   ]
+  # Thin ETFs whose option quotes are pulled at the 16:00 close: collected
+  # by a separate task at 15:45 ET while quotes are live (see README).
+  preclose_tickers: [XLV, HYG, LQD, EFA, XLI, XLU, KRE, XBI, EWZ, UNG, VXX]
   schedule_time: "16:30"          # 4:30 PM ET daily
   timezone: "America/New_York"
   min_open_interest: 10

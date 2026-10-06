@@ -91,6 +91,87 @@ def collection_allowed(as_of: date, now: datetime) -> tuple[bool, str]:
     return True, ""
 
 
+#: The pre-close snapshot runs in the last half hour before the close.
+PRECLOSE_WINDOW = timedelta(minutes=30)
+
+
+def preclose_allowed(as_of: date, now: datetime) -> tuple[bool, str]:
+    """Whether *now* is inside the pre-close window of *as_of*'s session.
+
+    Thin ETFs' option quotes are pulled at the 16:00 close, so their chains
+    are collected in the last half hour while the quotes are still live.
+    """
+    if now.date() != as_of:
+        return False, f"as-of {as_of} is not today ({now.date()})"
+    close = session_close(as_of, str(now.tzinfo))
+    if not (close - PRECLOSE_WINDOW <= now < close):
+        return False, (f"outside the pre-close window "
+                       f"({close - PRECLOSE_WINDOW:%H:%M}-{close:%H:%M %Z})")
+    return True, ""
+
+
+def _has_chain(output_dir: str, ticker: str, as_of: date) -> bool:
+    return (Path(output_dir) / f"ticker={ticker}" / f"date={as_of.isoformat()}").exists()
+
+
+def run_preclose(
+    cfg: ScraperConfig,
+    as_of: Optional[date] = None,
+    *,
+    force: bool = False,
+) -> ScrapeResult:
+    """Collect the chains of ``cfg.preclose_tickers`` before the close.
+
+    Rows are tagged ``snapshot = "preclose"``.  The 16:30 run then skips
+    these tickers' chains (keeping the live quotes) but builds their surfaces
+    and features with everyone else's.  Logged to
+    ``logs/preclose_runs.jsonl``.
+    """
+    from zoneinfo import ZoneInfo
+
+    from src.data.scraper import scrape_all
+    from src.data.storage import save_options_chain
+
+    now = datetime.now(ZoneInfo(cfg.timezone))
+    as_of = as_of or now.date()
+    tickers = list(cfg.preclose_tickers)
+    if not tickers or not is_market_open(as_of):
+        return ScrapeResult(as_of=as_of, tickers=tickers, total_rows=0, partitions_written=0,
+                            errors=[] if tickers else ["No pre-close tickers configured"])
+    ok, why = preclose_allowed(as_of, now)
+    if not ok and not force:
+        logger.warning("Not collecting pre-close chains: %s.", why)
+        return ScrapeResult(as_of=as_of, tickers=tickers, total_rows=0,
+                            partitions_written=0, errors=[f"Skipped: {why}"])
+
+    errors: list[str] = []
+    rows = parts = 0
+    try:
+        df = scrape_all(tickers, as_of=as_of, inter_ticker_delay=cfg.inter_ticker_delay)
+        if df.empty:
+            errors.append("Pre-close scrape returned nothing")
+        else:
+            df = _apply_quality_filters(df, cfg)
+            df["snapshot"] = "preclose"
+            missing = sorted(set(tickers) - set(df["ticker"]))
+            if missing:
+                errors.append(f"No pre-close chain for {', '.join(missing)}")
+            parts = len(save_options_chain(df, base_dir=cfg.output_dir))
+            rows = len(df)
+            logger.info("Pre-close options: %d rows -> %d partitions", rows, parts)
+    except Exception as exc:
+        logger.exception("Pre-close scrape failed")
+        errors.append(f"Options: {exc}")
+
+    result = ScrapeResult(as_of=as_of, tickers=tickers, total_rows=rows,
+                          partitions_written=parts, errors=errors)
+    log = Path(cfg.output_dir).parent / "logs" / "preclose_runs.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a") as f:
+        f.write(result.model_dump_json() + "\n")
+    return result
+
+
 def run_collection(
     cfg: ScraperConfig,
     as_of: Optional[date] = None,
@@ -152,8 +233,14 @@ def run_collection(
 
     # ── 1. Options chains ─────────────────────────────────────────────────
     logger.info("=== Collection cycle %s ===", as_of)
+    # Thin ETFs already collected before the close keep those live quotes.
+    done = [t for t in cfg.preclose_tickers
+            if t in cfg.tickers and _has_chain(cfg.output_dir, t, as_of)]
+    if done:
+        logger.info("Keeping pre-close chains for %s", ", ".join(done))
+    to_scrape = [t for t in cfg.tickers if t not in done]
     try:
-        df = scrape_all(cfg.tickers, as_of=as_of, inter_ticker_delay=cfg.inter_ticker_delay)
+        df = scrape_all(to_scrape, as_of=as_of, inter_ticker_delay=cfg.inter_ticker_delay)
         if df.empty:
             errors.append("Options scrape returned empty DataFrame")
         else:

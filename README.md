@@ -143,6 +143,20 @@ skipping non-trading days via the NYSE calendar. On Windows it
 is driven by a Task Scheduler entry (`\StochasticVolSurface\DailyScraper`) at
 16:30 ET, Mon–Fri. Each run appends to `data/logs/scrape_runs.jsonl`.
 
+**Pre-close snapshot for thin ETFs.** Market makers pull their quotes on thin
+ETF options at the 16:00 close. At 16:30 most out-of-the-money XLV options
+show a zero bid against a $0.50–$2 ask, and four tickers (XLV, HYG, LQD, EFA)
+got no surface at all on the first full run. So the tickers in
+`scraper.preclose_tickers` (`config/default.yaml`) are collected by a second
+task, `\StochasticVolSurface\PrecloseScraper`, at 15:45 ET
+(`schedule_scraper.py --preclose`, allowed only in the last half hour before
+the close). Their rows carry `snapshot = "preclose"`, and the 16:30 run keeps
+those chains instead of re-scraping, then builds their surfaces and features
+with everyone else's. If the pre-close run did not happen, the 16:30 run
+collects them as before. Their spot is about 15 minutes before the close,
+and the stored close is corrected by the next day's price refresh.
+Pre-close runs append to `data/logs/preclose_runs.jsonl`.
+
 ### Backup and alerts
 
 The last two steps of every daily run protect the data and check it:

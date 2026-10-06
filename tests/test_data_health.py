@@ -277,3 +277,42 @@ def test_collection_timing_guard():
     assert not collection_allowed(d, datetime(2026, 10, 5, 8, 0, tzinfo=ny))[0]    # next-morning catch-up
     half = date(2026, 11, 27)                               # day after Thanksgiving: 13:00 close
     assert collection_allowed(half, datetime(2026, 11, 27, 13, 30, tzinfo=ny))[0]
+
+
+def test_preclose_window():
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+
+    from src.data.scheduler import preclose_allowed
+
+    ny = ZoneInfo("America/New_York")
+    d = date(2026, 10, 2)
+    assert preclose_allowed(d, datetime(2026, 10, 2, 15, 45, tzinfo=ny))[0]
+    assert not preclose_allowed(d, datetime(2026, 10, 2, 15, 0, tzinfo=ny))[0]
+    assert not preclose_allowed(d, datetime(2026, 10, 2, 16, 0, tzinfo=ny))[0]    # quotes pulled
+    assert not preclose_allowed(d, datetime(2026, 10, 5, 15, 45, tzinfo=ny))[0]   # another day
+    half = date(2026, 11, 27)                                                     # 13:00 close
+    assert preclose_allowed(half, datetime(2026, 11, 27, 12, 45, tzinfo=ny))[0]
+
+
+def test_daily_run_keeps_preclose_chains(tmp_path, monkeypatch):
+    """Tickers already collected before the close are not re-scraped at 16:30;
+    the others are, and a pre-close ticker with no chain yet still is."""
+    from datetime import date
+
+    import src.data.scraper as scraper
+    from src.data.scheduler import run_collection
+    from src.data.schema import ScraperConfig
+
+    d = date(2026, 10, 2)
+    opt = tmp_path / "options"
+    (opt / "ticker=XLV" / f"date={d}").mkdir(parents=True)
+    scraped = []
+    monkeypatch.setattr(scraper, "scrape_all",
+                        lambda tickers, **kw: scraped.extend(tickers) or pd.DataFrame())
+    cfg = ScraperConfig(tickers=["SPY", "XLV", "HYG"], preclose_tickers=["XLV", "HYG"],
+                        output_dir=str(opt), collect_vix=False, collect_rates=False,
+                        collect_macro=False, collect_earnings=False, collect_underlying=False,
+                        build_surfaces=False, build_features=False)
+    run_collection(cfg, as_of=d, force=True)
+    assert scraped == ["SPY", "HYG"]
