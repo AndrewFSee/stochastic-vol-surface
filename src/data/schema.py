@@ -175,6 +175,8 @@ class ScraperConfig(BaseModel):
     features_path: str = Field(default="data/features/surface_features.parquet")
     macro_dir: str = Field(default="data/macro")
     collect_macro: bool = Field(default=True, description="FRED credit/macro series; needs FRED_API_KEY")
+    events_dir: str = Field(default="data/events")
+    collect_earnings: bool = Field(default=True, description="Earnings dates for single stocks")
     backup_dir: Optional[str] = Field(
         default=None,
         description="Copy data/ here after each run (see src.data.backup); None disables",

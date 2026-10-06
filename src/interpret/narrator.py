@@ -61,11 +61,14 @@ Known limits to respect:
 and about 0.5 in 30-day ATM vol; do not read meaning into single-day changes \
 smaller than that. Butterflies are precise (under 0.1 pts of noise) but small.
 - The volatility forecast is HAR plus implied vol, pooled across tickers and \
-mostly estimated on SPY. Its track_record shows how it has done here: compare \
-rmse_forecast_pts with rmse_implied_pts. For index ETFs it has usually beaten \
-raw implied vol; for single stocks raw implied vol has often been as good or \
-better, partly because implied vol prices known events such as earnings that \
-the model cannot see. Say which applies, using the numbers.
+mostly estimated on SPY. For single stocks it strips earnings out of its inputs \
+and adds the expected earnings-day move back when a release falls inside the \
+horizon. Its track_record shows how it has done here: compare \
+rmse_forecast_pts with rmse_implied_pts, and say which has been better.
+- "earnings" (single stocks only) gives the next release session, trading days \
+until it, and the one-day move the options imply versus the stock's historical \
+average. Implied vol at maturities spanning the release includes that jump, so \
+a short-dated vol above longer-dated vol before earnings is expected, not stress.
 - A large data_quality median_fit_error_pts (above ~0.6) or few expiries means \
 the surface is less reliable that day; mention it if so.
 

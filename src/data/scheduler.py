@@ -210,6 +210,15 @@ def run_collection(
             logger.exception("Underlying price collection failed")
             errors.append(f"Underlying: {exc}")
 
+    # ── 3c. Earnings dates ────────────────────────────────────────────────
+    if cfg.collect_earnings:
+        try:
+            n = _collect_earnings(as_of, cfg)
+            logger.info("Earnings dates: %d tickers refreshed", n)
+        except Exception as exc:
+            logger.exception("Earnings-date collection failed")
+            errors.append(f"Earnings: {exc}")
+
     # ── 4. Volatility surfaces ────────────────────────────────────────────
     # Runs last so it consumes the chains and rates written above.
     if cfg.build_surfaces and total_rows > 0:
@@ -232,7 +241,7 @@ def run_collection(
             feats = build_feature_table(
                 cfg.tickers, surfaces_dir=cfg.surfaces_dir,
                 underlying_dir=cfg.underlying_dir, vix_dir=cfg.vix_dir,
-                macro_dir=cfg.macro_dir,
+                macro_dir=cfg.macro_dir, events_dir=cfg.events_dir,
                 cache_path=str(Path(cfg.features_path).parent / "_surface_rows_cache.parquet"),
             )
             if feats.empty:
@@ -380,6 +389,20 @@ def _collect_macro(as_of: date, macro_dir: str) -> None:
     df = fetch_macro(start=(as_of - timedelta(days=60)).isoformat())
     if not df.empty:
         save_macro_history(df, macro_dir)
+
+
+def _collect_earnings(as_of: date, cfg: ScraperConfig) -> int:
+    """Refresh earnings dates: the stocks already known every day (dates get
+    confirmed or moved), every configured ticker on Mondays (new tickers)."""
+    from src.data.events import fetch_earnings, load_earnings, save_earnings
+
+    known = set(load_earnings(cfg.events_dir)["ticker"])
+    tickers = cfg.tickers if (as_of.weekday() == 0 or not known) else \
+        [t for t in cfg.tickers if t in known]
+    df = fetch_earnings(tickers)
+    if not df.empty:
+        save_earnings(df, cfg.events_dir)
+    return int(df["ticker"].nunique()) if not df.empty else 0
 
 
 def _collect_underlying(cfg: ScraperConfig) -> int:

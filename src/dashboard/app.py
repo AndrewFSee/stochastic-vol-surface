@@ -406,6 +406,15 @@ def view_forecast(t: Theme, ticker: str, as_of: pd.Timestamp, window_days) -> No
     st.caption("80% ranges: " + "  ·  ".join(
         f"{labels[h]} {D.pct(latest.loc[h, 'lo80_vol'])} – {D.pct(latest.loc[h, 'hi80_vol'])}"
         for h in (5, 21) if h in latest.index))
+    if "earnings_date" in latest and latest["earnings_date"].notna().any():
+        r = latest[latest["earnings_date"].notna()].iloc[0]
+        within = " and ".join(labels[h] for h in (5, 21)
+                              if h in latest.index and pd.notna(latest.loc[h, "earnings_date"]))
+        st.caption(
+            f"Earnings move the {pd.Timestamp(r['earnings_date']):%b %d} session, inside the "
+            f"{within} window. The forecast adds an expected earnings-day move of "
+            f"±{100 * r['earnings_move']:.1f}% (implied by the option surface where it can be "
+            "read, otherwise the stock's historical average).")
 
     h = 21 if st.segmented_control("Horizon", ["21-day", "5-day"], default="21-day",
                                    key="fc_horizon") != "5-day" else 5

@@ -98,6 +98,9 @@ def build_snapshot(features: pd.DataFrame, forecasts: pd.DataFrame, ticker: str,
             "vix3m_over_vix": _num((r.get("mkt_vix3m") or np.nan) / (r.get("mkt_vix") or np.nan), 1, 3),
             "vvix": _num(r.get("mkt_vvix")),
             "cboe_skew": _num(r.get("mkt_skew")),
+            "move_treasury_vol": _num(r.get("mkt_move")),
+            "high_yield_spread_pct": _num(r.get("macro_hy_oas")),
+            "chicago_fed_nfci": _num(r.get("macro_nfci")),
         },
         "data_quality": {
             "expiries_fitted": _num(r.get("n_expiries"), 1, 0),
@@ -105,6 +108,14 @@ def build_snapshot(features: pd.DataFrame, forecasts: pd.DataFrame, ticker: str,
             "median_fit_error_pts": _num(r.get("fit_rmse"), P),
         },
     }
+
+    if pd.notna(r.get("earn_next_date")):
+        snap["earnings"] = {
+            "next_release_session": str(pd.Timestamp(r["earn_next_date"]).date()),
+            "trading_days_until": _num(r.get("earn_days_to"), 1, 0),
+            "implied_move_pct": _num(r.get("earn_implied_move"), 100),
+            "historical_average_move_pct": _num(r.get("earn_hist_move"), 100),
+        }
 
     # ── Forecast and its track record ────────────────────────────────────
     fc_out: dict[str, Any] = {}

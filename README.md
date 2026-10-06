@@ -57,6 +57,7 @@ python scripts/backfill_rates.py --start 2026-01-01
 python scripts/backfill_underlying.py --start 2024-01-01
 python scripts/backfill_vix.py --start 2024-01-01
 python scripts/backfill_macro.py --start 2009-01-01
+python scripts/fetch_earnings.py
 
 # 5. Build the surface corpus from every stored chain
 python scripts/build_surfaces.py --report data/logs/surface_build.csv
@@ -87,7 +88,8 @@ directly: `.\.venv\Scripts\python.exe -m streamlit run src\dashboard\app.py`.
 | FRED API | `src/data/rates.py` | Risk-free curve (DGS1MO…DGS10) |
 | FRED API | `src/data/macro.py` | Credit spreads, dollar, breakevens, real yields, financial-stress indices |
 | yfinance | `src/data/underlying.py` | Daily OHLC for the tickers (realised vol) |
-| Kaggle | `src/data/kaggle_loader.py` | Historical SPY IV dataset |
+| yfinance | `src/data/events.py` | Earnings dates (past and scheduled) for the single stocks |
+| Kaggle | `src/data/kaggle_loader.py` | Historical SPY chains: 2010–2023 (CSV) and 2024–2025 (JSON) |
 | Parquet | `src/data/storage.py` | Partitioned storage with dedup |
 | — | `src/data/health.py` | Coverage / freshness / quality reporting |
 
@@ -119,6 +121,7 @@ data/
 │   └── vix_history.parquet                      # consolidated series
 ├── rates/rates_history.parquet                  # merged FRED curve
 ├── macro/macro_history.parquet                  # FRED credit/macro series
+├── events/earnings.parquet                      # earnings dates per stock
 ├── underlying/prices.parquet                    # daily OHLC, (date, ticker)
 ├── features/surface_features.parquet            # one row per (ticker, date)
 ├── forecasts/vol_forecasts.parquet              # one row per (ticker, date, horizon)
@@ -271,6 +274,7 @@ ones.
 | Premia | `vrp_30d`, `vrp_var_30d` | ATM − RV in vol; VS² − RV² in variance |
 | Market | `mkt_vix`, `mkt_vix3m`, `mkt_vix9d`, `mkt_vix1d`, `mkt_vvix`, `mkt_skew`, `mkt_vxn`, `mkt_vxd`, `mkt_ovx`, `mkt_gvz`, `mkt_move` | Index closes, same for every ticker. VIX1D starts in 2023 |
 | Macro | `macro_hy_oas`, `macro_ig_oas`, `macro_usd_broad`, `macro_breakeven_10y`, `macro_real_yield_10y`, `macro_stlfsi`, `macro_nfci` | FRED, joined by **publication** date (below) |
+| Earnings | `earn_next_date`, `earn_days_to`, `earn_days_since`, `earn_implied_move`, `earn_hist_move` | Single stocks only (NaN for funds); see Earnings below |
 | Dynamics | `<col>_d1`, `_d5`, `_z63`, `_pct252` | For the key columns; laid on the NYSE calendar, so a missing day is a gap, not a 2-day change |
 | Quality | `n_expiries`, `nearest_expiry_days`, `fit_rmse`, `parity_fraction` | Use to down-weight weak days |
 
@@ -344,6 +348,31 @@ Rebuilt in October 2026 with the per-expiry builder, the 2010–2023 corpus
 variance swap has 0.969 daily-change correlation with VIX and a 0.42-pt mean
 absolute difference. On 2020-03-16 it read 82.1 against VIX's 82.7. Median fit
 error is 0.19 vol pts.
+
+### 2024–2025: full chains from a second Kaggle dataset
+
+The 2010–2023 CSV dataset stops at the end of 2023. A second free dataset,
+[S&P500 Options (SPY) Implied Volatility (2014-25)](https://www.kaggle.com/datasets/shankerabhigyan/s-and-p500-options-spy-implied-volatility-2019-24),
+has every listed SPY contract's end-of-day bid, ask, volume, open interest
+and IV, one ~1 GB JSON file per year. `scripts/backfill_kaggle_json.py`
+streams the files one trading day at a time (memory stays small) and takes
+the underlying price from the SPY close in the price store:
+
+```bash
+python scripts/backfill_kaggle_json.py --download --years 24 25   # ~5 min after download
+python scripts/build_surfaces.py -t SPY --options-dir data/historical/options \
+    --surfaces-dir data/historical/surfaces
+python scripts/build_features.py --surfaces-dir data/historical/surfaces \
+    --out data/historical/features/surface_features.parquet
+```
+
+Built with the same per-expiry builder, the 486 days (2024: 252; 2025: 234,
+the dataset skips 16 days) check out against VIX as well as the live data:
+30d variance swap vs VIX level correlation 0.999, daily-change correlation
+0.998, mean absolute difference 0.28 pts. They include the April 2025 sell-off.
+The chains take ~105 MB and the surfaces ~18 MB. Only 1 Jan – 18 Feb 2026 is
+still missing; none of the free sources found covers it. Paid sources with
+complete history: ORATS, ThetaData, CBOE DataShop, Polygon/Massive options.
 
 To browse the history in the dashboard, point it at the historical store:
 
@@ -421,8 +450,55 @@ walk-forward evaluation on SPY 2013–2023; `python scripts/evaluate_forecasts.p
 - In the live 2026 sample, the model beats raw implied vol on index ETFs at
   21 days, whose implied vol carries a large risk premium. On single stocks
   and GLD, raw implied vol has been as good or better, probably because it
-  prices known events such as earnings. The Forecast tab shows both track
-  records side by side.
+  prices known events such as earnings. Earnings are now modelled explicitly
+  (below), which narrows but does not close that gap. The Forecast tab shows
+  both track records side by side.
+
+### Earnings
+
+Single stocks jump on earnings, and option prices carry that jump. The
+forecaster handles it explicitly (`src/forecast/forecaster.py`,
+`src/features/earnings.py`):
+
+- **Dates** come from yfinance (`scripts/fetch_earnings.py`, refreshed by the
+  daily job). A release before the open moves that day's session; one after
+  the close moves the next. On 875 past releases the mapped session's median
+  absolute return is 4.6%, against about 1.4% on the days either side.
+- **Implied earnings move.** For an expiry after the release, ATM total
+  variance is `σ²·n + e²`: diffusion over *n* sessions plus the jump. Two
+  expiries (one before and one after the release, or the first two after it)
+  solve for `e`, with time counted in trading sessions so a weekend between
+  weekly expiries does not distort it.
+- **Forecast.** The HAR + implied model runs on ex-earnings inputs (past
+  release days dropped from realised vol, the jump stripped from implied vol)
+  and is fitted to ex-earnings variance. When a release falls in the window,
+  `252/h · e²` is added back, using the implied move where the surface gives
+  one and the stock's historical average move otherwise.
+
+`scripts/evaluate_earnings.py` writes `docs/earnings_evaluation.md`:
+
+| QLIKE (lower is better) | 5-day | 21-day |
+|---|---|---|
+| **14 stocks, 2013–2026, no options data** (~44,000 forecasts) | | |
+| HAR | 0.538 | 0.312 |
+| HAR, earnings-adjusted (historical move) | **0.406** | **0.247** |
+| … windows containing a release: HAR → adjusted | 1.771 → 0.567 | 0.385 → 0.275 |
+| **AAPL, MSFT, TSLA, Feb–Oct 2026, with options** (~6 releases) | | |
+| HAR + implied (previous production model) | 0.338 | 0.145 |
+| HAR + implied, earnings-adjusted (implied move) | **0.331** | 0.133 |
+| Implied vol alone (raw) | 0.332 | **0.114** |
+
+The long-sample gain is large and significant at both horizons
+(Diebold-Mariano p < 0.001), including windows *without* a release, because
+a past release no longer inflates the trailing realised vol. On the short
+live sample the adjusted model beats the previous one everywhere, but not
+significantly, and raw implied vol is still best at 21 days for single
+stocks. Production uses the earnings-adjusted model (`forecast/2`).
+
+The feature table carries the inputs for other models: `earn_next_date`,
+`earn_days_to`, `earn_days_since`, `earn_implied_move`, `earn_hist_move`.
+Dates for releases far ahead may have been estimates at the time; within a
+few weeks of a release they are almost always confirmed.
 
 ### Are the features useful?
 

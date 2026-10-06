@@ -15,8 +15,9 @@ statistic is trailing and includes *t* itself, never later rows.
 Columns
 -------
 ``ticker, date`` keys; surface features (:mod:`.surface_features`);
-realised features (:mod:`.realized`); ``vrp_*`` premia; ``mkt_*`` VIX
-family; ``<col>_d1`` / ``_d5`` changes, ``_z63`` z-scores and ``_pct252``
+realised features (:mod:`.realized`); ``vrp_*`` premia; ``mkt_*`` CBOE
+vol indices; ``macro_*`` FRED series (:mod:`src.data.macro`); ``earn_*``
+earnings timing and moves (:mod:`.earnings`); ``<col>_d1`` / ``_d5`` changes, ``_z63`` z-scores and ``_pct252``
 percentile ranks for :data:`DYNAMIC_COLUMNS`; and provenance
 (``builder``, ``feature_version``).
 """
@@ -63,6 +64,7 @@ def _surface_rows(ticker: str, surfaces_dir: str, start, end,
     changed since it was last computed is reused instead of re-read; any
     rebuilt surface has a new modification time and is recomputed.
     """
+    from src.features.earnings import atm_term
     from src.features.surface_features import surface_features
     from src.surface.batch import BUILDER_VERSION, stored_builder
     from src.surface.surface import VolSurface
@@ -80,7 +82,7 @@ def _surface_rows(ticker: str, surfaces_dir: str, start, end,
             continue
         mtime = fp.stat().st_mtime
         hit = cache.get((ticker, dt)) if cache else None
-        if hit is not None and hit.get("_mtime") == mtime:
+        if hit is not None and hit.get("_mtime") == mtime and isinstance(hit.get("_atm_term"), str):
             rows.append(hit)
             continue
         if stored_builder(fp) != BUILDER_VERSION:
@@ -95,7 +97,8 @@ def _surface_rows(ticker: str, surfaces_dir: str, start, end,
         rows.append({
             "ticker": ticker, "date": pd.Timestamp(dt), "spot": float(vs.spot),
             **surface_features(vs.slices, spot=vs.spot),
-            "builder": vs.builder, "_mtime": mtime, "_fv": FEATURE_VERSION,
+            "builder": vs.builder, "_atm_term": atm_term(vs.slices),
+            "_mtime": mtime, "_fv": FEATURE_VERSION,
         })
     return rows
 
@@ -191,6 +194,7 @@ def build_feature_table(
     underlying_dir: str = "data/underlying",
     vix_dir: str = "data/vix",
     macro_dir: str = "data/macro",
+    events_dir: str = "data/events",
     start: Optional[str] = None,
     end: Optional[str] = None,
     cache_path: Optional[str] = None,
@@ -260,6 +264,13 @@ def build_feature_table(
     if not macro.empty:
         m = available_asof(macro, df["date"].unique())
         df = df.merge(m, left_on="date", right_index=True, how="left")
+
+    # Earnings timing and implied / historical event moves (single stocks).
+    from src.data.events import load_earnings
+    from src.features.earnings import earnings_features
+
+    df = earnings_features(df, load_earnings(events_dir), prices)
+    df = df.drop(columns=["_atm_term"], errors="ignore")
 
     df = add_dynamics(df)
     df["feature_version"] = FEATURE_VERSION
