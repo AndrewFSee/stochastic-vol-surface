@@ -38,21 +38,21 @@ DPI = 200
 
 def _style(t) -> None:
     plt.rcParams.update({
-        "font.family": ["Segoe UI", "DejaVu Sans"], "font.size": 10,
+        "font.family": ["Segoe UI", "DejaVu Sans"], "font.size": 13,
         "figure.facecolor": t.surface, "axes.facecolor": t.surface, "savefig.facecolor": t.surface,
         "text.color": t.ink, "axes.labelcolor": t.ink_secondary, "axes.edgecolor": t.axis,
         "xtick.color": t.ink_muted, "ytick.color": t.ink_muted,
         "axes.grid": True, "grid.color": t.grid, "grid.linewidth": 0.8,
         "axes.spines.top": False, "axes.spines.right": False,
         "legend.frameon": False, "legend.labelcolor": t.ink_secondary,
-        "axes.titlesize": 12, "axes.titleweight": "semibold", "axes.titlecolor": t.ink,
+        "axes.titlesize": 15, "axes.titleweight": "semibold", "axes.titlecolor": t.ink,
         "axes.titlelocation": "left", "axes.titlepad": 10,
     })
 
 
 def _title(fig, t, title: str, subtitle: str) -> None:
-    fig.text(0.012, 0.975, title, fontsize=15, fontweight="bold", color=t.ink, va="top")
-    fig.text(0.012, 0.915, subtitle, fontsize=10.5, color=t.ink_secondary, va="top")
+    fig.text(0.012, 0.975, title, fontsize=20, fontweight="bold", color=t.ink, va="top")
+    fig.text(0.012, 0.905, subtitle, fontsize=13.5, color=t.ink_secondary, va="top", wrap=True)
 
 
 def _save(fig, name: str, mode: str) -> None:
@@ -90,8 +90,8 @@ def fig_surface(t) -> None:
 
     cmap = LinearSegmentedColormap.from_list("vol", ("#cde2fb", "#6da7ec", "#256abf", "#104281"))
     lo, hi = np.nanmin(Z), np.nanmax(Z)
-    fig = plt.figure(figsize=(10.5, 6.4))
-    ax = fig.add_axes([-0.04, 0.0, 1.08, 0.9], projection="3d")
+    fig = plt.figure(figsize=(11, 7))
+    ax = fig.add_axes([-0.12, -0.03, 1.24, 1.0], projection="3d")
     ax.set_facecolor(t.surface)
     floor = np.floor(lo) - 1
     ax.plot_surface(X, Y, np.ma.masked_invalid(Z), cmap=cmap, vmin=lo, vmax=hi,
@@ -108,13 +108,13 @@ def fig_surface(t) -> None:
     ax.set_yticks(np.log(ticks), [f"{d_}d" if d_ < 365 else f"{d_ // 365}y" for d_ in ticks])
     ax.set_zlabel("Implied vol (%)", labelpad=8)
     ax.set_ylabel("Tenor", labelpad=10)
-    ax.tick_params(colors=t.ink_muted, labelsize=8.5)
+    ax.tick_params(colors=t.ink_muted, labelsize=11.5)
     ax.view_init(elev=22, azim=-62)
-    ax.set_box_aspect((1.25, 1.1, 0.7), zoom=0.95)
+    ax.set_box_aspect((1.3, 1.1, 0.72), zoom=1.0)
     atm30, p25, c25 = (100 * float(es.iv(es.delta_strike(x, 30 / 365), 30 / 365)) for x in (0.5, -0.25, 0.25))
     _title(fig, t, f"SPY implied-volatility surface · {d.name[5:]}",
-           f"Per-expiry SVI on put-call-parity forwards, 7 days to {int(days[-1])} days. "
-           f"30-day ATM {atm30:.1f}%, 25Δ put {p25:.1f}% vs call {c25:.1f}%: the equity skew")
+           f"Per-expiry SVI fits, 7 days to {int(days[-1]) // 365} years. 30-day ATM {atm30:.1f}%; "
+           f"25Δ put {p25:.1f}% vs call {c25:.1f}%: the equity skew")
     _save(fig, "surface", t.mode)
 
 
@@ -131,9 +131,9 @@ def fig_vix(t) -> None:
     gap = ours.index.to_series().diff() > pd.Timedelta(days=10)     # don't bridge data gaps
     o_plot = ours.where(~gap)
 
-    fig = plt.figure(figsize=(12, 5.2))
-    gs = fig.add_gridspec(1, 3, width_ratios=[2.6, 1, 1], left=0.05, right=0.99,
-                          bottom=0.1, top=0.8, wspace=0.18)
+    fig = plt.figure(figsize=(12, 5.8))
+    gs = fig.add_gridspec(1, 3, width_ratios=[2.6, 1, 1], left=0.055, right=0.99,
+                          bottom=0.12, top=0.76, wspace=0.2)
     main = fig.add_subplot(gs[0])
     main.plot(vix.index, vix, color=t.series[1], lw=1.0, label="VIX (CBOE)")
     main.plot(o_plot.index, o_plot, color=t.series[0], lw=1.0, label="Our SPY 30d variance swap")
@@ -146,12 +146,12 @@ def fig_vix(t) -> None:
         ax.plot(vix.loc[a:z], color=t.series[1], lw=2.0)
         ax.plot(ours.loc[a:z], color=t.series[0], lw=2.0)
         ax.set_title(ttl)
-        ax.tick_params(axis="x", rotation=30, labelsize=8.5)
+        ax.tick_params(axis="x", rotation=30, labelsize=11)
         ax.xaxis.set_major_locator(matplotlib.dates.AutoDateLocator(minticks=3, maxticks=5))
         ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%b %d"))
     _title(fig, t, "Validated against VIX",
-           f"Rebuilt from our fitted SPY smiles, independently of CBOE: level correlation "
-           f"{b['level_corr']:.3f}, mean absolute gap {b['mean_abs_diff']:.2f} vol pts over "
+           f"Rebuilt from our SPY smiles, independently of CBOE: correlation "
+           f"{b['level_corr']:.3f}, mean gap {b['mean_abs_diff']:.2f} vol pts over "
            f"{int(b['n']):,} days")
     _save(fig, "vix_validation", t.mode)
 
@@ -170,22 +170,21 @@ def fig_forecast(t) -> None:
     def br(v):
         return np.where(gap.to_numpy(), np.nan, 100 * v.to_numpy())
 
-    fig, ax = plt.subplots(figsize=(12, 4.8))
-    fig.subplots_adjust(left=0.05, right=0.99, bottom=0.1, top=0.8)
+    fig, ax = plt.subplots(figsize=(12, 5.6))
+    fig.subplots_adjust(left=0.06, right=0.99, bottom=0.08, top=0.72)
     ax.fill_between(x, br(done["lo80_vol"]), br(done["hi80_vol"]), color=t.series[0],
                     alpha=0.16, lw=0, label="80% forecast range")
     ax.plot(x, br(done["implied_vol"]), color=t.series[1], lw=1.2, label="Implied vol at the time")
     ax.plot(x, br(done["forecast_vol"]), color=t.series[0], lw=1.6, label="Model forecast")
     ax.plot(x, br(done["realised_vol"]), color=t.series[2], lw=1.6, label="Realised")
     ax.set_ylabel("21-day volatility (%)")
-    ax.legend(loc="upper right", ncol=4)
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=4, fontsize=11.5)
     inside = ((done.realised_vol >= done.lo80_vol) & (done.realised_vol <= done.hi80_vol)).mean()
     err_m = 100 * np.sqrt(((done.forecast_vol - done.realised_vol) ** 2).mean())
     err_i = 100 * np.sqrt(((done.implied_vol - done.realised_vol) ** 2).mean())
     _title(fig, t, "Out-of-sample volatility forecasts · SPY, 21 trading days",
-           f"Walk-forward HAR + implied vol, each point plotted when its window closed. "
-           f"RMSE {err_m:.1f} vs {err_i:.1f} vol pts for raw implied; "
-           f"{100 * inside:.0f}% of outcomes inside the 80% range")
+           f"Walk-forward HAR + implied vol, plotted when each window closed. RMSE "
+           f"{err_m:.1f} vs {err_i:.1f} pts for raw implied; the 80% range held {100 * inside:.0f}% of outcomes")
     _save(fig, "forecast", t.mode)
 
 
@@ -200,23 +199,22 @@ def _qlike_table(md: str, horizon: str) -> pd.Series:
 def fig_models(t) -> None:
     md = (ROOT / "docs/forecast_evaluation.md").read_text(encoding="utf-8")
     period = re.search(r"Walk-forward, (\d{4})-\d\d-\d\d to (\d{4})", md).groups()
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.9))
-    fig.subplots_adjust(left=0.16, right=0.98, bottom=0.12, top=0.78, wspace=0.55)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.8))
+    fig.subplots_adjust(left=0.18, right=0.98, bottom=0.11, top=0.76, wspace=0.62)
     for ax, h in zip(axes, ("5", "21")):
         q = _qlike_table(md, h).sort_values(ascending=False)
         colors = [t.series[0] if m == "HAR + implied" else t.ink_muted for m in q.index]
         ax.barh(q.index, q.values, color=colors, height=0.62)
         for y, v in enumerate(q.values):
-            ax.text(v + 0.004, y, f"{v:.3f}", va="center", fontsize=8.5, color=t.ink_secondary)
+            ax.text(v + 0.004, y, f"{v:.3f}", va="center", fontsize=11, color=t.ink_secondary)
         ax.set_title(f"{h}-day horizon")
         ax.set_xlabel("QLIKE loss (lower is better)")
         ax.set_xlim(0.3, q.max() * 1.1)
         ax.grid(axis="y", visible=False)
-        ax.tick_params(axis="y", labelsize=9, colors=t.ink_secondary)
+        ax.tick_params(axis="y", labelsize=11.5, colors=t.ink_secondary)
     _title(fig, t, "Ten models, one honest backtest",
-           f"SPY {period[0]}–{period[1]}, walk-forward with monthly refits and no look-ahead. "
-           "The production model (blue) beats HAR at 5 days (p < 0.001); LSTMs, GARCH and "
-           "boosting do worse")
+           f"SPY {period[0]}–{period[1]}, walk-forward, no look-ahead. Production model in blue: "
+           "beats HAR at 5 days (p < 0.001)")
     _save(fig, "models", t.mode)
 
 
@@ -231,18 +229,18 @@ def fig_cross(t) -> None:
     order = [tk for ts in GROUPS.values() for tk in ts if tk in s.index]
     s = s.loc[order]
 
-    fig, ax = plt.subplots(figsize=(12, 5.4))
-    fig.subplots_adjust(left=0.05, right=0.99, bottom=0.17, top=0.76)
+    fig, ax = plt.subplots(figsize=(12, 6.2))
+    fig.subplots_adjust(left=0.06, right=0.99, bottom=0.15, top=0.72)
     x = np.arange(len(order))
     iv, rv = 100 * s["atm_30d"], 100 * s["rv_cc_21d"]
     ax.vlines(x, np.minimum(iv, rv), np.maximum(iv, rv), color=t.axis, lw=1.4, zorder=1)
     ax.scatter(x, rv, s=34, facecolor=t.surface, edgecolor=t.series[1], lw=1.6, zorder=2,
                label="Realised vol, last 21 days")
     ax.scatter(x, iv, s=38, color=t.series[0], zorder=3, label="30-day implied vol (ATM)")
-    ax.set_xticks(x, order, rotation=90, fontsize=8.5)
+    ax.set_xticks(x, order, rotation=90, fontsize=10.5)
     ax.set_xlim(-0.8, len(order) - 0.2)
     ax.set_ylabel("Volatility (%)")
-    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, fontsize=9.5)
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, fontsize=11.5)
     ax.grid(axis="x", visible=False)
     ymax = np.nanmax([iv.max(), rv.max()])
     start = 0
@@ -252,13 +250,15 @@ def fig_cross(t) -> None:
             continue
         if start:
             ax.axvline(start - 0.5, color=t.grid, lw=1.2, zorder=0)
-        ax.text(start + (n - 1) / 2, ymax * 1.06, g, ha="center", fontsize=8.5,
+        short = {"US equity indices": "Indices", "Rates and credit": "Rates & credit",
+                 "International": "Intl", "Crypto and VIX": "Crypto, VIX"}.get(g, g)
+        ax.text(start + (n - 1) / 2, ymax * 1.06, short, ha="center", fontsize=10.5,
                 color=t.ink_secondary)
         start += n
     ax.set_ylim(0, ymax * 1.14)
     _title(fig, t, f"{len(order)} underlyings, one daily pipeline · {day:%Y-%m-%d}",
-           "Implied above realised is the volatility risk premium; credit and Treasury ETFs sit "
-           "low, crypto and single stocks high")
+           "Implied above realised is the volatility risk premium. Credit and Treasuries sit "
+           "low; crypto and single stocks high")
     _save(fig, "cross_asset", t.mode)
 
 

@@ -1,0 +1,2 @@
+# Executed notebooks are documentation; keep them out of GitHub's language stats.
+*.ipynb linguist-documentation
