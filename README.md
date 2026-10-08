@@ -1,15 +1,103 @@
 # Stochastic Vol Surface
 
-Daily implied-volatility surfaces for SPY and other liquid US equity and ETF
-options, a point-in-time feature table built from them for downstream models,
-and a dashboard for reading both.
+[![tests](https://github.com/AndrewFSee/stochastic-vol-surface/actions/workflows/tests.yml/badge.svg)](https://github.com/AndrewFSee/stochastic-vol-surface/actions/workflows/tests.yml)
+![Python 3.13](https://img.shields.io/badge/python-3.13-3776ab)
+![Underlyings](https://img.shields.io/badge/underlyings-41-2a78d6)
+![Tests](https://img.shields.io/badge/tests-300-1baf7a)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
-The pipeline: scrape option chains each day after the close, fit an SVI smile
-per expiry on parity-implied forwards, interpolate to constant maturities,
-derive level, skew, term-structure, variance-swap and realised-vol features,
-and serve them in a Streamlit dashboard. SPY's rebuilt 30-day variance swap
-tracks VIX with 0.98 daily-change correlation; `scripts/validate_surfaces.py`
-re-checks this.
+**An end-to-end implied-volatility platform.** Every trading day it collects
+option chains for 41 US equity and ETF underlyings, fits arbitrage-aware
+volatility surfaces, and publishes a point-in-time feature table for
+machine-learning models. It also produces backtested volatility forecasts
+and serves everything in an interactive dashboard with written commentary
+from Claude.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/surface-dark.png">
+  <img alt="SPY implied-volatility surface in delta and tenor" src="docs/images/surface-light.png">
+</picture>
+
+## Highlights
+
+- **Surfaces that match the market's own benchmark.** Rebuilt independently
+  from SPY option quotes, our 30-day variance swap tracks CBOE's VIX with
+  **0.997** correlation over **4,131 days (2010–2026)**, including the March
+  2020 crash and the April 2025 sell-off.
+- **A production data pipeline, not a notebook.** Scheduled collection with
+  a market-calendar timing guard, a pre-close snapshot for thin ETFs, a CBOE
+  fallback when the primary source fails, daily backups, and health checks
+  that raise desktop alerts.
+- **ML-ready features with a data contract.** A 106-column point-in-time
+  table covers surface shape, variance swaps, realised vol, CBOE vol indices,
+  FRED macro and credit series, and earnings. Every column's unit and
+  NaN rule is documented, and forward labels come aligned for training.
+- **Forecasts chosen by an honest backtest.** Ten models, from GARCH to
+  LSTM-GARCH hybrids, were walk-forward tested with no look-ahead. The
+  winner, HAR + implied vol, is significantly better than HAR at 5 days.
+  Modelling earnings explicitly cut single-stock forecast error (QLIKE) by
+  25% at 5 days and 21% at 21 days across 14 stocks.
+- **Engineered to last.** 300 offline tests in CI, a pinned dependency lock,
+  re-executable notebooks documenting every result, and a dashboard that
+  never extrapolates beyond quoted strikes.
+
+## At a glance
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard_overview-dark.png">
+  <img alt="Dashboard overview: every ticker's vol level, percentile, trend and skew on one table" src="docs/images/dashboard_overview-light.png">
+</picture>
+
+<table>
+<tr>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard_smile-dark.png">
+  <img alt="Fitted SVI smiles drawn over market quotes" src="docs/images/dashboard_smile-light.png">
+</picture>
+<p align="center"><sub>Fitted smiles over the market quotes they came from</sub></p>
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard_surface-dark.png">
+  <img alt="Implied-vol surface heatmap and its one-week change" src="docs/images/dashboard_surface-light.png">
+</picture>
+<p align="center"><sub>Tenor × delta surface and how it moved this week</sub></p>
+</td>
+</tr>
+</table>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/vix_validation-dark.png">
+  <img alt="Our SPY 30-day variance swap against VIX, 2010 to 2026, with zooms on March 2020 and April 2025" src="docs/images/vix_validation-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/forecast-dark.png">
+  <img alt="Out-of-sample 21-day volatility forecasts for SPY with 80% ranges, implied and realised vol" src="docs/images/forecast-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/models-dark.png">
+  <img alt="QLIKE loss of ten volatility models at 5- and 21-day horizons" src="docs/images/models-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/cross_asset-dark.png">
+  <img alt="Implied versus realised volatility across 41 underlyings grouped by asset class" src="docs/images/cross_asset-light.png">
+</picture>
+
+<sub>Figures are generated from the project's own data by
+`python scripts/make_readme_figures.py`; screenshots are of the Streamlit
+dashboard (`src/dashboard/app.py`).</sub>
+
+## How it works
+
+The pipeline scrapes option chains each day after the close and fits an SVI
+smile per expiry on parity-implied forwards. It interpolates those to
+constant maturities, derives level, skew, term-structure, variance-swap and
+realised-vol features, and serves them in a Streamlit dashboard.
+`scripts/validate_surfaces.py` re-checks the VIX benchmark.
 
 Research code that is not validated against market data (parametric models,
 a neural SDE, trading signals, a backtest engine, LLM agent stubs) lives in
