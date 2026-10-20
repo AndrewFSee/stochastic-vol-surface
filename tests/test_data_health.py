@@ -316,3 +316,19 @@ def test_daily_run_keeps_preclose_chains(tmp_path, monkeypatch):
                         build_surfaces=False, build_features=False)
     run_collection(cfg, as_of=d, force=True)
     assert scraped == ["SPY", "HYG"]
+
+
+def test_skipped_preclose_run_is_logged(tmp_path):
+    """A pre-close run outside its window still leaves a log line."""
+    import json
+    from datetime import date
+
+    from src.data.scheduler import run_preclose
+    from src.data.schema import ScraperConfig
+
+    cfg = ScraperConfig(tickers=["XLV"], preclose_tickers=["XLV"],
+                        output_dir=str(tmp_path / "options"))
+    res = run_preclose(cfg, as_of=date(2026, 10, 2))      # a past session: never in the window
+    assert res.errors and res.errors[0].startswith("Skipped")
+    lines = (tmp_path / "logs" / "preclose_runs.jsonl").read_text().splitlines()
+    assert json.loads(lines[-1])["errors"][0].startswith("Skipped")

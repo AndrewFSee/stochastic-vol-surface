@@ -124,8 +124,9 @@ def run_preclose(
 
     Rows are tagged ``snapshot = "preclose"``.  The 16:30 run then skips
     these tickers' chains (keeping the live quotes) but builds their surfaces
-    and features with everyone else's.  Logged to
-    ``logs/preclose_runs.jsonl``.
+    and features with everyone else's.  Every outcome, including a skipped
+    run (holiday, outside the window), is logged to
+    ``logs/preclose_runs.jsonl``, so a missed window leaves a trace.
     """
     from zoneinfo import ZoneInfo
 
@@ -135,14 +136,18 @@ def run_preclose(
     now = datetime.now(ZoneInfo(cfg.timezone))
     as_of = as_of or now.date()
     tickers = list(cfg.preclose_tickers)
-    if not tickers or not is_market_open(as_of):
+    if not tickers:
         return ScrapeResult(as_of=as_of, tickers=tickers, total_rows=0, partitions_written=0,
-                            errors=[] if tickers else ["No pre-close tickers configured"])
+                            errors=["No pre-close tickers configured"])
+    if not is_market_open(as_of):
+        return _log_preclose(cfg, ScrapeResult(as_of=as_of, tickers=tickers, total_rows=0,
+                                               partitions_written=0,
+                                               errors=["Market closed - skipped"]))
     ok, why = preclose_allowed(as_of, now)
     if not ok and not force:
         logger.warning("Not collecting pre-close chains: %s.", why)
-        return ScrapeResult(as_of=as_of, tickers=tickers, total_rows=0,
-                            partitions_written=0, errors=[f"Skipped: {why}"])
+        return _log_preclose(cfg, ScrapeResult(as_of=as_of, tickers=tickers, total_rows=0,
+                                               partitions_written=0, errors=[f"Skipped: {why}"]))
 
     errors: list[str] = []
     rows = parts = 0
@@ -163,8 +168,11 @@ def run_preclose(
         logger.exception("Pre-close scrape failed")
         errors.append(f"Options: {exc}")
 
-    result = ScrapeResult(as_of=as_of, tickers=tickers, total_rows=rows,
-                          partitions_written=parts, errors=errors)
+    return _log_preclose(cfg, ScrapeResult(as_of=as_of, tickers=tickers, total_rows=rows,
+                                           partitions_written=parts, errors=errors))
+
+
+def _log_preclose(cfg: ScraperConfig, result: ScrapeResult) -> ScrapeResult:
     log = Path(cfg.output_dir).parent / "logs" / "preclose_runs.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a") as f:
