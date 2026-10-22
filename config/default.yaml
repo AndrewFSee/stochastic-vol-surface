@@ -12,6 +12,10 @@ scraper:
   # Thin ETFs whose option quotes are pulled at the 16:00 close: collected
   # by a separate task at 15:45 ET while quotes are live (see README).
   preclose_tickers: [XLF, XLE, XLK, XLV, XLI, XLU, KRE, XBI, HYG, LQD, EEM, EFA, EWZ, UNG, VXX]
+  # Options too illiquid for a surface every day even before the close: a
+  # missing surface is logged as a warning, and alerts only after 3 sessions
+  # in a row.
+  best_effort_tickers: [HYG]
   schedule_time: "16:30"          # 4:30 PM ET daily
   timezone: "America/New_York"
   min_open_interest: 10

@@ -243,7 +243,16 @@ those chains instead of re-scraping, then builds their surfaces and features
 with everyone else's. If the pre-close run did not happen, the 16:30 run
 collects them as before. Their spot is about 15 minutes before the close,
 and the stored close is corrected by the next day's price refresh.
-Pre-close runs append to `data/logs/preclose_runs.jsonl`.
+Pre-close runs append to `data/logs/preclose_runs.jsonl`, including skipped
+ones.
+
+**Best-effort tickers.** Some options are too illiquid for a surface every
+day even before the close. HYG's out-of-the-money strikes trade for pennies,
+leaving 2–11 usable quotes per expiry, so on some days fewer than the 4
+required expiries fit. Tickers in `scraper.best_effort_tickers` keep being
+collected and used when their surface builds. A missing surface is logged as
+a warning, not an error. The health check alerts only once one has been
+missing 3 sessions in a row (`best_effort_max_missing`).
 
 ### Backup and alerts
 

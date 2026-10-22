@@ -177,6 +177,13 @@ class ScraperConfig(BaseModel):
         default_factory=list,
         description="Thin tickers collected before the close (their quotes vanish at 16:00)",
     )
+    best_effort_tickers: list[str] = Field(
+        default_factory=list,
+        description="Tickers whose options are too illiquid for a surface every day: a "
+                    "missing surface is a warning, not an alert, until it is missing "
+                    "best_effort_max_missing sessions in a row",
+    )
+    best_effort_max_missing: int = Field(default=3, ge=1)
     macro_dir: str = Field(default="data/macro")
     collect_macro: bool = Field(default=True, description="FRED credit/macro series; needs FRED_API_KEY")
     events_dir: str = Field(default="data/events")
