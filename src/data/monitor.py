@@ -85,16 +85,45 @@ def _latest_options_date(options_dir: str) -> Optional[str]:
     return f["latest"].isoformat() if f["latest"] else None
 
 
-def _check_surfaces(options_dir: str, surfaces_dir: str, latest: str) -> Check:
+def _missing_streak(options_dir: str, surfaces_dir: str, ticker: str, latest: str) -> int:
+    """Sessions in a row, ending at *latest*, with a chain but no current surface."""
+    from src.surface.batch import BUILDER_VERSION, stored_builder, surface_path
+
+    dates = sorted((p.name.split("=", 1)[1] for p in (Path(options_dir) / f"ticker={ticker}").glob("date=*")
+                    if p.name.split("=", 1)[1] <= latest), reverse=True)
+    n = 0
+    for d in dates:
+        if stored_builder(surface_path(ticker, d, surfaces_dir)) == BUILDER_VERSION:
+            break
+        n += 1
+    return n
+
+
+def _check_surfaces(options_dir: str, surfaces_dir: str, latest: str,
+                    best_effort: Sequence[str] = (), max_missing: int = 3) -> Check:
+    """Every ticker collected on *latest* has a surface.  A best-effort ticker's
+    missing surface is only a warning until it has been missing *max_missing*
+    sessions in a row."""
     from src.surface.batch import BUILDER_VERSION, stored_builder, surface_path
 
     tickers = [p.name.split("=", 1)[1] for p in Path(options_dir).glob("ticker=*")
                if (p / f"date={latest}" / "chain.parquet").exists()]
-    missing = [t for t in tickers
-               if stored_builder(surface_path(t, latest, surfaces_dir)) != BUILDER_VERSION]
-    return Check("surfaces", not missing,
-                 f"no surface for {latest}: {', '.join(sorted(missing))}" if missing
-                 else f"{len(tickers)} surfaces built for {latest}")
+    missing = sorted(t for t in tickers
+                     if stored_builder(surface_path(t, latest, surfaces_dir)) != BUILDER_VERSION)
+    hard = [t for t in missing if t not in best_effort]
+    soft = [t for t in missing if t in best_effort]
+    streaks = {t: _missing_streak(options_dir, surfaces_dir, t, latest) for t in soft}
+    hard += [t for t in soft if streaks[t] >= max_missing]
+    warn = [t for t in soft if streaks[t] < max_missing]
+    parts = []
+    if hard:
+        parts.append(f"no surface for {latest}: {', '.join(sorted(hard))}")
+    if warn:
+        parts.append("best-effort, warning only: " + ", ".join(
+            f"{t} ({streaks[t]} session{'s' if streaks[t] > 1 else ''})" for t in warn))
+    if not hard:
+        parts.insert(0, f"{len(tickers) - len(warn)} of {len(tickers)} surfaces built for {latest}")
+    return Check("surfaces", not hard, "; ".join(parts))
 
 
 def _check_features(features_path: str, latest: str):
@@ -189,6 +218,8 @@ def run_checks(
     backup_dir: Optional[str] = None,
     max_stale: int = 0,
     min_free_gb: float = MIN_FREE_GB,
+    best_effort: Sequence[str] = (),
+    best_effort_max_missing: int = 3,
 ) -> list[Check]:
     """Run every check; never raises (a crashing check becomes a failed check)."""
     as_of = as_of or date.today()
@@ -204,7 +235,8 @@ def run_checks(
     out.append(guard("freshness", _check_freshness, options_dir, tickers, as_of, max_stale))
     latest = guard("surfaces", _latest_options_date, options_dir)
     if isinstance(latest, str):
-        out.append(guard("surfaces", _check_surfaces, options_dir, surfaces_dir, latest))
+        out.append(guard("surfaces", _check_surfaces, options_dir, surfaces_dir, latest,
+                         best_effort, best_effort_max_missing))
         res = guard("features", _check_features, features_path, latest)
         feat_check, features = res if isinstance(res, tuple) else (res, None)
         out.append(feat_check)

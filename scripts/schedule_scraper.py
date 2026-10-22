@@ -99,6 +99,7 @@ def main(tickers, schedule_time, timezone, output_dir, vix, rates, surfaces,
         backup_dir=(_yaml_all.get("backup") or {}).get("dir"),
         inter_ticker_delay=_yaml_cfg.get("inter_ticker_delay", 1.5),
         preclose_tickers=_yaml_cfg.get("preclose_tickers") or [],
+        best_effort_tickers=_yaml_cfg.get("best_effort_tickers") or [],
     )
 
     if preclose:

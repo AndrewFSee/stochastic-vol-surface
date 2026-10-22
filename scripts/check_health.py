@@ -35,7 +35,8 @@ def main(do_notify, test_notification, max_stale):
     warnings.filterwarnings("ignore")
     cfg = yaml.safe_load(open("config/default.yaml"))
     checks = run_checks(tickers=cfg["scraper"]["tickers"],
-                        backup_dir=(cfg.get("backup") or {}).get("dir"), max_stale=max_stale)
+                        backup_dir=(cfg.get("backup") or {}).get("dir"), max_stale=max_stale,
+                        best_effort=cfg["scraper"].get("best_effort_tickers") or [])
     for c in checks:
         click.echo(f"{'OK  ' if c.ok else 'FAIL'}  {c.name:10s} {c.message}")
     failed = [c for c in checks if not c.ok]

@@ -318,11 +318,16 @@ def run_collection(
     # Runs last so it consumes the chains and rates written above.
     if cfg.build_surfaces and total_rows > 0:
         try:
-            counts = _build_surfaces(as_of, cfg)
-            logger.info("Surfaces: %s", counts)
-            failed = counts.get("failed", 0) + counts.get("rejected", 0)
-            if failed:
-                errors.append(f"Surfaces: {failed} failed/rejected")
+            report = _build_surfaces(as_of, cfg)
+            logger.info("Surfaces: %s", report.counts())
+            bad = sorted(r.ticker for r in report.results if r.status in ("failed", "rejected"))
+            soft = [t for t in bad if t in cfg.best_effort_tickers]
+            hard = [t for t in bad if t not in cfg.best_effort_tickers]
+            if soft:
+                logger.warning("No surface for best-effort %s (illiquid options; not an error)",
+                               ", ".join(soft))
+            if hard:
+                errors.append(f"Surfaces: {len(hard)} failed/rejected ({', '.join(hard)})")
         except Exception as exc:
             logger.exception("Surface build failed")
             errors.append(f"Surfaces: {exc}")
@@ -386,6 +391,8 @@ def run_collection(
             tickers=cfg.tickers, run_errors=errors, as_of=as_of,
             options_dir=cfg.output_dir, surfaces_dir=cfg.surfaces_dir,
             features_path=cfg.features_path, backup_dir=cfg.backup_dir,
+            best_effort=cfg.best_effort_tickers,
+            best_effort_max_missing=cfg.best_effort_max_missing,
         )
         record(checks, as_of, str(Path(cfg.output_dir).parent / "logs" / "health_checks.jsonl"))
         if alert_if_failing(checks):
@@ -517,8 +524,8 @@ def _collect_underlying(cfg: ScraperConfig) -> int:
     return len(df)
 
 
-def _build_surfaces(as_of: date, cfg: ScraperConfig) -> dict[str, int]:
-    """Build volatility surfaces for the snapshots just collected."""
+def _build_surfaces(as_of: date, cfg: ScraperConfig):
+    """Build volatility surfaces for the snapshots just collected (the report)."""
     from src.surface.batch import build_corpus
 
     report = build_corpus(
@@ -529,7 +536,7 @@ def _build_surfaces(as_of: date, cfg: ScraperConfig) -> dict[str, int]:
         progress=False,
         workers=max(1, min(len(cfg.tickers), (os.cpu_count() or 2) - 1)),
     )
-    return report.counts()
+    return report
 
 
 def _save_run_log(result: ScrapeResult, base_dir: str) -> None:
